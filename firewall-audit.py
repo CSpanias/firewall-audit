@@ -41,18 +41,37 @@ class FirewallAudit:
         self.review_rules = []
         self.acls = []
 
+        self.control_plane_acl = None
+
         # AAA
         self.tacacs = False
         self.radius = False
         self.saml = False
 
+        self.tacacs_servers = set()
+        self.radius_servers = set()
+        self.ise_servers = set()
+
         # Monitoring
         self.snmp = False
         self.syslog = False
 
+        self.monitoring_platforms = set()
+
+        # Logging
+        self.logging_enabled = False
+        self.logging_destinations = set()
+
         # Routing / NAT
         self.bgp = False
         self.nat = False
+
+        # WebVpn
+        self.webvpn_hsts = False
+        self.webvpn_csp = False
+        self.webvpn_tls = False
+        self.webvpn_ciphers = set()
+
 
     def parse(self, filepath):
 
@@ -200,11 +219,14 @@ class FirewallAudit:
                 self.object_group_count += 1
                 self.object_groups.append(match.group(1))
 
+            
             #
             # ACLS
             #
 
             if line.startswith("access-list "):
+
+                self.acl_count += 1
 
                 if " any any " in f" {line.lower()} ":
                     self.review_rules.append(line)
@@ -215,14 +237,8 @@ class FirewallAudit:
                 if " deny " in lowered:
                     self.deny_rules += 1
 
-                if (
-                    " permit ip any any "
-                    in lowered
-                ):
-
-                    self.any_any_rules.append(
-                        line
-                    )
+                if " permit ip any any " in lowered:
+                    self.any_any_rules.append(line)
 
             #
             # AAA
@@ -240,6 +256,33 @@ class FirewallAudit:
                 self.saml = True
 
             #
+            # CONTROL PLANE
+            #
+
+            if "control-plane" in lowered and "access-group" in lowered:
+                self.control_plane_acl = line.strip()
+            
+            #
+            # AAA Infrastructure
+            #
+
+            if line.startswith("object network"):
+
+                name = line.split()[-1]
+
+                upper_name = name.upper()
+
+                if "TACACS" in upper_name:
+                    self.tacacs_servers.add(name)
+
+                if "RADIUS" in upper_name:
+                    self.radius_servers.add(name)
+
+                if "ISE" in upper_name:
+                    self.ise_servers.add(name)
+
+
+            #
             # MONITORING
             #
 
@@ -248,6 +291,84 @@ class FirewallAudit:
 
             if "syslog" in lowered:
                 self.syslog = True
+
+            
+            #
+            # Monitoring Infrastructure
+            #
+
+            upper = line.upper()
+
+            if line.startswith("object network"):
+
+                name = line.split()[-1]
+
+                upper_name = name.upper()
+
+                if (
+                    "SOLARWINDS" in upper_name
+                    or "SYSLOG" in upper_name
+                    or "ALERT-LOGIC" in upper_name
+                    or upper_name.startswith("LM-")
+                    or "NOC" in upper_name
+                ):
+                    self.monitoring_platforms.add(name)
+
+            if line.startswith("object-group network"):
+
+                name = line.split()[-1]
+
+                upper_name = name.upper()
+
+                if (
+                    "SOLARWINDS" in upper_name
+                    or "SYSLOG" in upper_name
+                    or "ALERT-LOGIC" in upper_name
+                    or upper_name.startswith("LM-")
+                    or "NOC" in upper_name
+                ):
+                    self.monitoring_platforms.add(name)
+
+            #
+            # LOGGING
+            #
+
+            if line.startswith("logging enable"):
+                self.logging_enabled = True
+
+            if line.startswith("object network"):
+
+                name = line.split()[-1]
+
+                if "SYSLOG" in name.upper():
+                    self.logging_destinations.add(name)
+
+            if line.startswith("object-group network"):
+
+                name = line.split()[-1]
+
+                if "SYSLOG" in name.upper():
+                    self.logging_destinations.add(name)
+
+            #
+            # WEBVPN
+            #
+
+            if "hsts-server" in lowered or "hsts-client" in lowered:
+                self.webvpn_hsts = True
+
+            if "content-security-policy" in lowered:
+                self.webvpn_csp = True
+
+            if line.startswith("ssl cipher tlsv1.2"):
+                self.webvpn_tls = True
+
+                if '"' in line:
+                    cipher_string = line.split('"')[1]
+
+                    for cipher in cipher_string.split(":"):
+                        self.webvpn_ciphers.add(cipher.strip())
+
 
             #
             # ROUTING
@@ -267,6 +388,73 @@ class FirewallAudit:
                 or " nat " in f" {line} "
             ):
                 self.nat = True
+
+    def print_authentication(self):
+
+        print(f"TACACS : {'Yes' if self.tacacs else 'No'}")
+        print(f"RADIUS : {'Yes' if self.radius else 'No'}")
+        print(f"SAML   : {'Yes' if self.saml else 'No'}")
+
+        if self.tacacs_servers:
+
+            print("\nTACACS Servers:")
+
+            for server in sorted(self.tacacs_servers):
+                print(f"  - {server}")
+
+        if self.radius_servers:
+
+            print("\nRADIUS Services:")
+
+            for server in sorted(self.radius_servers):
+                print(f"  - {server}")
+
+        if self.ise_servers:
+
+            print("\nCisco ISE Servers:")
+
+            for server in sorted(self.ise_servers):
+                print(f"  - {server}")
+
+        print("\nLearning:")
+        print("  TACACS is commonly used for administrator authentication.")
+        print()
+        print("  RADIUS is often used with MFA solutions.")
+        print()
+        print("  SAML typically indicates Azure AD / Entra integration.")
+
+    def print_logging(self):
+
+        print(f"Logging Enabled : {'Yes' if self.logging_enabled else 'No'}")
+
+        if self.logging_destinations:
+
+            print("\nLogging Destinations:")
+
+            for destination in sorted(self.logging_destinations):
+                print(f"  - {destination}")
+
+
+    def print_webvpn(self):
+
+        print(f"HSTS                 : {'Yes' if self.webvpn_hsts else 'No'}")
+        print(f"Content Security     : {'Yes' if self.webvpn_csp else 'No'}")
+        print(f"TLS 1.2 Configured   : {'Yes' if self.webvpn_tls else 'No'}")
+
+        if self.webvpn_ciphers:
+
+            print("\nTLS Cipher Suites:")
+
+            for cipher in sorted(self.webvpn_ciphers):
+                print(f"  - {cipher}")
+
+        print("\nLearning:")
+        print("  HSTS helps prevent protocol downgrade attacks.")
+        print()
+        print("  Content Security Policy helps reduce browser-based attacks.")
+        print()
+        print("  Restricting TLS cipher suites improves cryptographic security.")
+
 
     def section(self, title):
 
@@ -331,6 +519,8 @@ class FirewallAudit:
         print(f"Network Objects : {self.object_count}")
         print(f"Object Groups   : {self.object_group_count}")
         print(f"ACL Entries     : {self.acl_count}")
+        print(f"Permit Rules    : {self.permit_rules}")
+        print(f"Deny Rules      : {self.deny_rules}")
         print("\nExample Objects:\n")
         
         for obj in self.objects[:20]:
@@ -340,9 +530,6 @@ class FirewallAudit:
         
         for group in self.object_groups[:20]:
             print(f" - {group}")
-        
-        print(f"Permit Rules    : {self.permit_rules}")
-        print(f"Deny Rules      : {self.deny_rules}")
 
         print("\nWhy this matters:")
         print("Firewall rules determine who can communicate with whom.")
@@ -407,17 +594,8 @@ class FirewallAudit:
         #
 
         self.section("7. ADMINISTRATION & AUTHENTICATION")
+        self.print_authentication()
 
-        print(f"TACACS : {'Yes' if self.tacacs else 'No'}")
-        print(f"RADIUS : {'Yes' if self.radius else 'No'}")
-        print(f"SAML   : {'Yes' if self.saml else 'No'}")
-        
-        print("\nLearning:")
-        print("  TACACS is commonly used for administrator authentication.")
-        print()
-        print("  RADIUS is often used with MFA solutions.")
-        print()
-        print("  SAML typically indicates Azure AD / Entra integration.")
 
         #
         # ROUTING / NAT
@@ -437,14 +615,51 @@ class FirewallAudit:
         #
 
         self.section("9. MONITORING")
+
         print(f"SNMP   : {'Yes' if self.snmp else 'No'}")
         print(f"Syslog : {'Yes' if self.syslog else 'No'}")
+
+        if self.monitoring_platforms:
+
+            print("\nMonitoring Platforms:")
+
+            for platform in sorted(self.monitoring_platforms):
+                print(f"  - {platform}")
 
         print("\nLearning:")
         print("  SNMP is used for monitoring.")
         print()
         print("  Syslog exports security")
         print("  and operational events.")
+
+        #
+        # LOGGING
+        #
+
+        self.section("10. LOGGING")
+        self.print_logging()
+
+        #
+        # WEBVPN
+        #
+
+        self.section("8. WEBVPN SECURITY")
+        self.print_webvpn()
+
+        #
+        # CONTROL PLANE
+        #
+
+        self.section("CONTROL PLANE PROTECTION")
+
+        if self.control_plane_acl:
+
+            print("Control Plane ACL:")
+            print(f"  {self.control_plane_acl}")
+
+        else:
+
+            print("No control-plane ACL identified.")
 
         #
         # ROADMAP
