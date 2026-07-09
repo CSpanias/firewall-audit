@@ -3,9 +3,6 @@
 import re
 import sys
 
-from pyparsing import line
-
-
 class FirewallAudit:
 
     def __init__(self):

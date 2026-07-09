@@ -6,7 +6,7 @@ Currently supports:
 * Cisco Firepower Threat Defense (FTD)
 * Cisco Adaptive Security Appliance (ASA)
 
-Developed as an educational tool to accompany [Firewall Security Explained](https://mollysec.com/posts/email-security-explained/).
+Developed as an educational tool to accompany [Firewall Security Explained](https://mollysec.com/posts/firewall-security-explained/).
 
 It analyses firewall configurations and provides a structured assessment consisting of:
 
@@ -244,7 +244,7 @@ Control Plane ACL:
 
 ### Optional
 
-* Cisco Firepower Threat Defense (FTD) configuration exports
+* 
 
 ## Limitations
 
