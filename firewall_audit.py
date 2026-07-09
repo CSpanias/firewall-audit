@@ -657,20 +657,17 @@ class FirewallAudit:
 
 def main():
 
+    if len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help"):
+        print(f"Usage: {sys.argv[0]} <config.log>")
+        sys.exit(0)
+
     if len(sys.argv) != 2:
-
-        print(
-            f"Usage: {sys.argv[0]} <config.log>"
-        )
-
+        print(f"Usage: {sys.argv[0]} <config.log>")
         sys.exit(1)
 
     audit = FirewallAudit()
-
     audit.parse(sys.argv[1])
-
     audit.report()
-
 
 if __name__ == "__main__":
     main()
