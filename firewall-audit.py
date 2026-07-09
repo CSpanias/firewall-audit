@@ -3,6 +3,8 @@
 import re
 import sys
 
+from pyparsing import line
+
 
 class FirewallAudit:
 
@@ -39,6 +41,9 @@ class FirewallAudit:
         self.deny_rules = 0
 
         self.review_rules = []
+        self.any_any_rules = []
+        self.tunnel_rules = []
+        self.default_deny_rules = []
         self.acls = []
 
         self.control_plane_acl = None
@@ -72,6 +77,9 @@ class FirewallAudit:
         self.webvpn_tls = False
         self.webvpn_ciphers = set()
 
+        # Management access
+        self.management_access = []
+
 
     def parse(self, filepath):
 
@@ -85,14 +93,10 @@ class FirewallAudit:
 
             line = raw_line.strip()
 
-            #
-            # DEVICE
-            #
-
-            if (
-                "Cisco Firepower" in line
-                and "Threat Defense" in line
-            ):
+            #--------------------#
+            # Device Information #
+            #--------------------#
+            if ("Cisco Firepower" in line and "Threat Defense" in line):
                 self.model = line
 
             match = re.match(r"hostname\s+(.+)", line)
@@ -103,41 +107,26 @@ class FirewallAudit:
             if match:
                 self.version = match.group(1)
 
-            #
-            # INTERFACES
-            #
-
-            match = re.match(
-                r"interface\s+(.+)",
-                line
-            )
+            #------------#
+            # Interfaces #
+            #------------#
+            match = re.match(r"interface\s+(.+)",line)
 
             if match:
 
                 current_interface = match.group(1)
                 self.interfaces.append(current_interface)
+                current_is_tunnel = (current_interface.startswith("Tunnel"))
 
-                current_is_tunnel = (
-                    current_interface.startswith("Tunnel")
-                )
+            #------------------#
+            # Disabled Tunnels #
+            #------------------#
+            if (line == "shutdown" and current_is_tunnel and current_interface):
+                self.disabled_tunnels.append(current_interface)
 
-            #
-            # DISABLED TUNNELS
-            #
-
-            if (
-                line == "shutdown"
-                and current_is_tunnel
-                and current_interface
-            ):
-                self.disabled_tunnels.append(
-                    current_interface
-                )
-
-            #
-            # INTERFACE NAMES
-            #
-
+            #-----------------#
+            # Interface Names #
+            #-----------------#
             match = re.match(r"nameif\s+(.+)", line)
 
             if match:
@@ -150,85 +139,72 @@ class FirewallAudit:
                 if ("mgt" in nameif.lower() or "management" in nameif.lower()):
                     self.management_interfaces.append(nameif)
 
-            #
-            # VPN POOLS
-            #
-
-            match = re.match(
-                r"ip local pool\s+(\S+)",
-                line
-            )
+            #-----------#
+            # VPN Pools #
+            #-----------#
+            match = re.match(r"ip local pool\s+(\S+)",line)
 
             if match:
-                self.vpn_pools.append(
-                    match.group(1)
-                )
+                self.vpn_pools.append(match.group(1))
 
-            #
-            # TUNNEL DESCRIPTIONS
-            #
+            #---------------------#
+            # Tunnel Descriptions #
+            #---------------------#
+            if (line.startswith("description ") and "VTI" in line.upper()):
 
-            if (
-                line.startswith("description ")
-                and "VTI" in line.upper()
-            ):
-
-                desc = (
-                    line.replace(
-                        "description",
-                        ""
-                    )
-                    .strip()
-                )
-
+                desc = (line.replace("description","").strip())
                 self.tunnels.append(desc)
 
-            #
-            # ZONES
-            #
-
+            #-------#
+            # Zones #
+            #-------#
             if "security-zone" in line:
 
-                zone_match = re.match(
-                    r"object-group interface (.+?) security-zone",
-                    line
-                )
+                zone_match = re.match(r"object-group interface (.+?) security-zone",line)
 
                 if zone_match:
-                    self.zones.add(
-                        zone_match.group(1)
-                    )
+                    self.zones.add(zone_match.group(1))
 
-            #
-            # OBJECTS
-            #
-
+            #---------#
+            # Objects #
+            #---------#
             match = re.match(r"object network (.+)", line)
             
             if match:
                 self.object_count +=1
                 self.objects.append(match.group(1))
 
-            #
-            # OBJECT GROUPS
-            #
-
+            #---------------#
+            # Object Groups #
+            #---------------#
             match = re.match(r"object-group (.+)", line)
             
             if match:
                 self.object_group_count += 1
                 self.object_groups.append(match.group(1))
 
-            
-            #
-            # ACLS
-            #
-
+            #------#
+            # ACLs #
+            #------#
             if line.startswith("access-list "):
 
+                lowered = line.lower()
+                self.acls.append(line)
                 self.acl_count += 1
 
-                if " any any " in f" {line.lower()} ":
+                if (
+                    " permit gre any any " in lowered
+                    or " permit ipinip any any " in lowered
+                    or " permit 41 any any " in lowered
+                ):
+                    self.tunnel_rules.append(line)
+
+                if (
+                    " any any " in lowered
+                    and " permit gre any any " not in lowered
+                    and " permit ipinip any any " not in lowered
+                    and " permit 41 any any " not in lowered
+                ):
                     self.review_rules.append(line)
 
                 if " permit " in lowered:
@@ -237,13 +213,15 @@ class FirewallAudit:
                 if " deny " in lowered:
                     self.deny_rules += 1
 
-                if " permit ip any any " in lowered:
+                if (" permit " in lowered and " any any " in lowered):
                     self.any_any_rules.append(line)
 
-            #
-            # AAA
-            #
+                if " deny ip any any " in lowered:
+                    self.default_deny_rules.append(line)
 
+            #-----#
+            # AAA #
+            #-----#
             lowered = line.lower()
 
             if "tacacs" in lowered:
@@ -255,17 +233,15 @@ class FirewallAudit:
             if "saml" in lowered:
                 self.saml = True
 
-            #
-            # CONTROL PLANE
-            #
-
+            #---------------#
+            # Control Plane #
+            #---------------#
             if "control-plane" in lowered and "access-group" in lowered:
                 self.control_plane_acl = line.strip()
             
-            #
-            # AAA Infrastructure
-            #
-
+            #--------------------#
+            # AAA Infrastructure #
+            #--------------------#
             if line.startswith("object network"):
 
                 name = line.split()[-1]
@@ -281,22 +257,18 @@ class FirewallAudit:
                 if "ISE" in upper_name:
                     self.ise_servers.add(name)
 
-
-            #
-            # MONITORING
-            #
-
+            #------------#
+            # Monitoring #
+            #------------#
             if "snmp" in lowered:
                 self.snmp = True
 
             if "syslog" in lowered:
                 self.syslog = True
 
-            
-            #
-            # Monitoring Infrastructure
-            #
-
+            #---------------------------#
+            # Monitoring Infrastructure #
+            #---------------------------#
             upper = line.upper()
 
             if line.startswith("object network"):
@@ -329,10 +301,9 @@ class FirewallAudit:
                 ):
                     self.monitoring_platforms.add(name)
 
-            #
-            # LOGGING
-            #
-
+            #---------#
+            # Logging #
+            #---------#
             if line.startswith("logging enable"):
                 self.logging_enabled = True
 
@@ -350,10 +321,9 @@ class FirewallAudit:
                 if "SYSLOG" in name.upper():
                     self.logging_destinations.add(name)
 
-            #
-            # WEBVPN
-            #
-
+            #--------#
+            # WebVPN #
+            #--------#
             if "hsts-server" in lowered or "hsts-client" in lowered:
                 self.webvpn_hsts = True
 
@@ -369,25 +339,28 @@ class FirewallAudit:
                     for cipher in cipher_string.split(":"):
                         self.webvpn_ciphers.add(cipher.strip())
 
-
-            #
-            # ROUTING
-            #
-
+            #---------#
+            # Routing #
+            #---------#
             if line.startswith(
                 "router bgp"
             ):
                 self.bgp = True
 
-            #
-            # NAT
-            #
-
+            #-----#
+            # NAT #
+            #-----#
             if (
                 line.startswith("nat ")
                 or " nat " in f" {line} "
             ):
                 self.nat = True
+
+            #-------------------#
+            # Management Access #
+            #-------------------#
+            if line.startswith("ssh "):
+                self.management_access.append(line)
 
     def print_authentication(self):
 
