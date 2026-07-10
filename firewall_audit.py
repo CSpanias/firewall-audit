@@ -5,34 +5,59 @@ import sys
 
 class FirewallAudit:
 
+    # Colour definitions
+    COLOR_BLUE = "\033[0;34m"
+    COLOR_CYAN = "\033[0;36m"
+    COLOR_BOLD = "\033[1m"
+    COLOR_RESET = "\033[0m"
+
     def __init__(self):
 
-        # Device
+        # -----------------------------
+        # Device Information
+        # -----------------------------
+
         self.hostname = None
         self.version = None
         self.model = None
 
-        # Interfaces / Zones
-        self.interfaces = []
-        self.zones = set()
+        # -----------------------------
+        # Network Architecture
+        # -----------------------------
 
-        self.internet_interfaces = []
-        self.management_interfaces = []
+        # Network Identification
+        self.interfaces = []
         self.nameifs = []
 
-        # VPN
-        self.vpn_pools = []
-        self.tunnels = []
-        self.disabled_tunnels = []
+        # Security Zones
+        self.zones = set()
+        self.zone_members = {}
+
+        # Trust Boundaries
+        self.trust_boundaries = []
+        self.trust_levels = {}
+
+        # Publicly Exposed Networks
+        self.internet_interfaces = []
+        self.internet_vpn_termination = []
+
+        # Management Interfaces
+        self.management_interfaces = []
+        self.management_access = []
+
+        # -----------------------------
+        # Access Control
+        # -----------------------------
 
         # Objects
         self.object_count = 0
-        self.object_group_count = 0
-        
         self.objects = []
+
+        # Object Groups
+        self.object_group_count = 0
         self.object_groups = []
 
-        # ACL
+        # Access Control Lists (ACLs)
         self.acl_count = 0
         self.permit_rules = 0
         self.deny_rules = 0
@@ -43,45 +68,77 @@ class FirewallAudit:
         self.default_deny_rules = []
         self.acls = []
 
-        self.control_plane_acl = None
+        # -----------------------------
+        # VPN Security
+        # -----------------------------
 
-        # AAA
+        # VPN Pools
+        self.vpn_pools = []
+
+        # Tunnel Descriptions
+        self.tunnels = []
+
+        # Disabled Tunnels
+        self.disabled_tunnels = []
+
+        # -----------------------------
+        # Administrator Authentication
+        # -----------------------------
+
+        # Authentication, Authorization, and Accounting (AAA)
         self.tacacs = False
         self.radius = False
         self.saml = False
 
+        # AAA Infrastructure
         self.tacacs_servers = set()
         self.radius_servers = set()
         self.ise_servers = set()
 
+        # -----------------------------
+        # Monitoring & Logging
+        # -----------------------------
+
         # Monitoring
         self.snmp = False
-        self.syslog = False
 
+        # Monitoring Infrastructure
         self.monitoring_platforms = set()
 
         # Logging
+        self.syslog = False
         self.logging_enabled = False
         self.logging_destinations = set()
 
-        # Routing / NAT
-        self.bgp = False
-        self.nat = False
+        # -----------------------------
+        # Control Plane Protection
+        # -----------------------------
 
-        # WebVpn
+        # Control Plane
+        self.control_plane_acl = None
+
+        # WebVPN
         self.webvpn_hsts = False
         self.webvpn_csp = False
         self.webvpn_tls = False
         self.webvpn_ciphers = set()
 
-        # Management access
-        self.management_access = []
+        # -----------------------------
+        # Network Services
+        # -----------------------------
 
+        # Routing
+        self.bgp = False
 
+        # Network Address Translation (NAT)
+        self.nat = False
+
+    # Parsing the configuration file
     def parse(self, filepath):
 
         current_interface = None
         current_is_tunnel = False
+        current_zone = None
 
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
@@ -89,41 +146,38 @@ class FirewallAudit:
         for raw_line in lines:
 
             line = raw_line.strip()
+            lowered = line.lower()
 
-            #--------------------#
-            # Device Information #
-            #--------------------#
+            # -----------------------------
+            # Device Information
+            # -----------------------------
+
             if ("Cisco Firepower" in line and "Threat Defense" in line):
                 self.model = line
 
+            # Hostname
             match = re.match(r"hostname\s+(.+)", line)
             if match:
                 self.hostname = match.group(1)
 
+            # Version
             match = re.match(r"NGFW Version\s+(.+)", line)
             if match:
                 self.version = match.group(1)
 
-            #------------#
-            # Interfaces #
-            #------------#
+            # -----------------------------
+            # Network Architecture
+            # -----------------------------
+
+            # Network Identification
             match = re.match(r"interface\s+(.+)",line)
 
             if match:
-
                 current_interface = match.group(1)
                 self.interfaces.append(current_interface)
                 current_is_tunnel = (current_interface.startswith("Tunnel"))
 
-            #------------------#
-            # Disabled Tunnels #
-            #------------------#
-            if (line == "shutdown" and current_is_tunnel and current_interface):
-                self.disabled_tunnels.append(current_interface)
-
-            #-----------------#
-            # Interface Names #
-            #-----------------#
+            # Interface Names
             match = re.match(r"nameif\s+(.+)", line)
 
             if match:
@@ -136,53 +190,93 @@ class FirewallAudit:
                 if ("mgt" in nameif.lower() or "management" in nameif.lower()):
                     self.management_interfaces.append(nameif)
 
-            #-----------#
-            # VPN Pools #
-            #-----------#
+            # Security Zones
+
+            # Leave the current zone block
+            if line.startswith("object-group ") and "security-zone" not in line:
+                current_zone = None
+
+            # Zone Definition
+            zone_match = re.match(r"object-group interface (.+?) security-zone",line)
+
+            if zone_match:
+                current_zone = zone_match.group(1)
+                self.zones.add(current_zone)
+
+                if current_zone not in self.zone_members:
+                    self.zone_members[current_zone] = []
+
+            # Zone Members
+            member_match = re.match(r"interface-object interface-name (.+)",line)
+
+            if member_match and current_zone:
+                self.zone_members[current_zone].append(member_match.group(1))
+
+            # Trust Boundaries
+            # TODO: Implement trust boundary detection logic here
+
+            # Publicly Exposed Networks
+            match = re.match(r"tunnel source interface (.+)",line)
+
+            if match:
+                source_interface = match.group(1)
+
+                if "internet" in source_interface.lower():
+                    self.internet_vpn_termination.append(source_interface)
+
+            # Management Access
+            if line.startswith("ssh "):
+                self.management_access.append(line)
+
+            # -----------------------------
+            # Disabled Tunnels
+            # -----------------------------
+
+            if (line == "shutdown" and current_is_tunnel and current_interface):
+                self.disabled_tunnels.append(current_interface)
+
+            # -----------------------------
+            # VPN Pools 
+            # -----------------------------
+
             match = re.match(r"ip local pool\s+(\S+)",line)
 
             if match:
                 self.vpn_pools.append(match.group(1))
 
-            #---------------------#
-            # Tunnel Descriptions #
-            #---------------------#
+            # -----------------------------
+            # Tunnel Descriptions 
+            # -----------------------------
+
             if (line.startswith("description ") and "VTI" in line.upper()):
 
                 desc = (line.replace("description","").strip())
                 self.tunnels.append(desc)
 
-            #-------#
-            # Zones #
-            #-------#
-            if "security-zone" in line:
+            # -----------------------------
+            # Objects
+            # -----------------------------
 
-                zone_match = re.match(r"object-group interface (.+?) security-zone",line)
-
-                if zone_match:
-                    self.zones.add(zone_match.group(1))
-
-            #---------#
-            # Objects #
-            #---------#
             match = re.match(r"object network (.+)", line)
             
             if match:
                 self.object_count +=1
                 self.objects.append(match.group(1))
 
-            #---------------#
-            # Object Groups #
-            #---------------#
+            # -----------------------------
+            # Object Groups
+            # -----------------------------
+
             match = re.match(r"object-group (.+)", line)
             
             if match:
                 self.object_group_count += 1
                 self.object_groups.append(match.group(1))
 
-            #------#
-            # ACLs #
-            #------#
+            # -----------------------------
+            # Access Control Lists
+            # -----------------------------
+
             if line.startswith("access-list "):
 
                 lowered = line.lower()
@@ -216,9 +310,10 @@ class FirewallAudit:
                 if " deny ip any any " in lowered:
                     self.default_deny_rules.append(line)
 
-            #-----#
-            # AAA #
-            #-----#
+            # -----------------------------
+            # AAA
+            # -----------------------------
+
             lowered = line.lower()
 
             if "tacacs" in lowered:
@@ -353,12 +448,6 @@ class FirewallAudit:
             ):
                 self.nat = True
 
-            #-------------------#
-            # Management Access #
-            #-------------------#
-            if line.startswith("ssh "):
-                self.management_access.append(line)
-
     def print_authentication(self):
 
         print(f"TACACS : {'Yes' if self.tacacs else 'No'}")
@@ -425,23 +514,26 @@ class FirewallAudit:
         print()
         print("  Restricting TLS cipher suites improves cryptographic security.")
 
-
     def section(self, title):
 
         print()
-        print("=" * 80)
-        print(title)
-        print("=" * 80)
+        print(f"{self.COLOR_BLUE}{'=' * 80}{self.COLOR_RESET}")
+        print(f"{self.COLOR_BOLD}{title}{self.COLOR_RESET}")
+        print(f"{self.COLOR_BLUE}{'=' * 80}{self.COLOR_RESET}")
+
+    def subsection(self, title):
+
+        print(f"\n{self.COLOR_CYAN}{title}{self.COLOR_RESET}\n")
 
     def report(self):
 
         self.section("FIREWALL AUDIT - CONFIGURATION OVERVIEW")
 
-        #
-        # DEVICE
-        #
+        # -----------------------------
+        # Device Information
+        # -----------------------------
 
-        self.section("1. DEVICE & MANAGEMENT PLANE")
+        self.section("1. DEVICE INFORMATION")
 
         print(f"Hostname : {self.hostname}")
         print(f"Version  : {self.version}")
@@ -450,40 +542,52 @@ class FirewallAudit:
         print("\nWhy this matters:")
         print("  Firmware versions determine security features, support status and potential vulnerabilities.")
 
-        #
-        # ARCHITECTURE
-        #
+        # -----------------------------
+        # Network Architecture
+        # -----------------------------
 
         self.section("2. NETWORK ARCHITECTURE")
 
-        print(f"Interfaces Found : {len(self.interfaces)}")
-        print(f"\nName Interfaces:")
-        
-        for iface in sorted(set(self.nameifs)):
-            print(f" - {iface}")
-        
-        print("\nZones:")
+        vpn_zones = sum(1 for zone in self.zones if "vti" in zone.lower())
 
-        for zone in sorted(self.zones):
-            print(f"  - {zone}")
-        print("\nInternet Facing Interfaces:")
+        print(f"Named Segments       : {len(self.nameifs)}")
+        print(f"Security Zones       : {len(self.zones)}")
+        print(f"Internet Interfaces  : {len(self.internet_interfaces)}")
+        print(f"VPN Zones            : {vpn_zones}")
+        print(f"Management Interfaces: {len(self.management_interfaces)}")
 
-        for iface in sorted(set(self.internet_interfaces)):
-            print(f"  - {iface}")
+        self.subsection("SECURITY ZONE SUMMARY")
 
-        print("\nManagement Interfaces:")
+        for zone in sorted(self.zone_members):
 
-        for iface in sorted(set(self.management_interfaces)):
-            print(f"  - {iface}")
-        print("\nReview Focus:")
-        print("  - Internet -> Corp access")
-        print("  - Internet -> Management access")
-        print("  - DMZ segregation")
-        print("  - Trust boundaries")
+            members = self.zone_members[zone]
+            count = len(members)
 
-        #
-        # ACCESS CONTROL
-        #
+            suffix = "IF" if count == 1 else "IFs"
+
+            print(f"  - {zone} ({count} {suffix})")
+
+        if self.internet_interfaces:
+            self.subsection("PUBLICLY EXPOSED NETWORKS")
+
+            for iface in sorted(set(self.internet_interfaces)):
+                print(f"  - {iface}")
+
+        if self.management_interfaces:
+            self.subsection("MANAGEMENT INTERFACES")
+
+            for iface in sorted(set(self.management_interfaces)):
+                print(f"  - {iface}")
+
+        if self.management_access:
+            self.subsection("MANAGEMENT ACCESS")
+
+            for entry in self.management_access:
+                print(f"  - {entry}")
+
+        # -----------------------------
+        # Access Control Lists (ACLs)
+        # -----------------------------
 
         self.section("3. ACCESS CONTROL")
         print(f"Network Objects : {self.object_count}")
