@@ -2,12 +2,15 @@
 
 import re
 import sys
+import ipaddress
 
 class FirewallAudit:
 
     # Colour definitions
     COLOR_BLUE = "\033[0;34m"
     COLOR_CYAN = "\033[0;36m"
+    COLOR_YELLOW = "\033[0;33m"
+    COLOR_RED = "\033[0;31m"
     COLOR_BOLD = "\033[1m"
     COLOR_RESET = "\033[0m"
 
@@ -32,6 +35,8 @@ class FirewallAudit:
         # Security Zones
         self.zones = set()
         self.zone_members = {}
+        self.vpn_zones_count = 0
+        self.vpn_zones = []
 
         # Trust Boundaries
         self.trust_boundaries = []
@@ -41,7 +46,7 @@ class FirewallAudit:
         self.internet_interfaces = []
         self.internet_vpn_termination = []
 
-        # Management Interfaces
+        # Management Access Sources
         self.management_interfaces = []
         self.management_access = []
 
@@ -59,13 +64,13 @@ class FirewallAudit:
 
         # Access Control Lists (ACLs)
         self.acl_count = 0
-        self.permit_rules = 0
-        self.deny_rules = 0
 
-        self.review_rules = []
+        self.permit_rules_count = 0
+        self.deny_rules_count = 0
+        self.permit_rules_count = 0
+
         self.any_any_rules = []
-        self.tunnel_rules = []
-        self.default_deny_rules = []
+
         self.acls = []
 
         # -----------------------------
@@ -77,6 +82,7 @@ class FirewallAudit:
 
         # Tunnel Descriptions
         self.tunnels = []
+        self.tunnel_rules = []
 
         # Disabled Tunnels
         self.disabled_tunnels = []
@@ -226,8 +232,73 @@ class FirewallAudit:
 
             # Management Access
             if line.startswith("ssh "):
-                self.management_access.append(line)
+                parts = line.split()
 
+                if len(parts) >= 4:
+
+                    network = ipaddress.IPv4Network(f"{parts[1]}/{parts[2]}", strict=False)
+                    self.management_access.append({
+                        "network": str(network),
+                        "interface": parts[3]
+                        })
+
+            # VPN Zones
+            self.vpn_zones_count = sum(1 for zone in self.zones if ("vti" in zone.lower() or "vpn" in zone.lower()))
+
+            # -----------------------------
+            # Access Control
+            # -----------------------------
+
+            # Objects
+            match = re.match(r"object network (.+)", line)
+            
+            if match:
+                self.object_count +=1
+                self.objects.append(match.group(1))
+
+            # Object Groups
+            match = re.match(r"object-group (.+)", line)
+
+            if (match and "security-zone" not in line):
+                self.object_group_count += 1
+                self.object_groups.append(match.group(1))
+
+            # Access Control Lists (ACLs)
+            if line.startswith("access-list "):
+
+                lowered = line.lower()
+
+                self.acls.append(line)
+                self.acl_count += 1
+
+                # Permit Rules
+                if " permit " in lowered:
+                    self.permit_rules_count += 1
+
+                # Deny Rules
+                if " deny " in lowered:
+                    self.deny_rules_count += 1
+
+                # Any-Any Rules
+                if (
+                    " permit ip any any" in lowered
+                    or " permit tcp any any" in lowered
+                    or " permit udp any any" in lowered
+                ):
+                    self.any_any_rules.append(line)
+
+            # -----------------------------
+            # VPN Security
+            # -----------------------------
+
+            # Tunnel Rules
+                if (
+                    " permit gre any any" in lowered
+                    or " permit ipinip any any" in lowered
+                    or " permit 41 any any" in lowered
+                ):
+                    self.tunnel_rules.append(line)
+            
             # -----------------------------
             # Disabled Tunnels
             # -----------------------------
@@ -252,63 +323,6 @@ class FirewallAudit:
 
                 desc = (line.replace("description","").strip())
                 self.tunnels.append(desc)
-
-            # -----------------------------
-            # Objects
-            # -----------------------------
-
-            match = re.match(r"object network (.+)", line)
-            
-            if match:
-                self.object_count +=1
-                self.objects.append(match.group(1))
-
-            # -----------------------------
-            # Object Groups
-            # -----------------------------
-
-            match = re.match(r"object-group (.+)", line)
-            
-            if match:
-                self.object_group_count += 1
-                self.object_groups.append(match.group(1))
-
-            # -----------------------------
-            # Access Control Lists
-            # -----------------------------
-
-            if line.startswith("access-list "):
-
-                lowered = line.lower()
-                self.acls.append(line)
-                self.acl_count += 1
-
-                if (
-                    " permit gre any any " in lowered
-                    or " permit ipinip any any " in lowered
-                    or " permit 41 any any " in lowered
-                ):
-                    self.tunnel_rules.append(line)
-
-                if (
-                    " any any " in lowered
-                    and " permit gre any any " not in lowered
-                    and " permit ipinip any any " not in lowered
-                    and " permit 41 any any " not in lowered
-                ):
-                    self.review_rules.append(line)
-
-                if " permit " in lowered:
-                    self.permit_rules += 1
-
-                if " deny " in lowered:
-                    self.deny_rules += 1
-
-                if (" permit " in lowered and " any any " in lowered):
-                    self.any_any_rules.append(line)
-
-                if " deny ip any any " in lowered:
-                    self.default_deny_rules.append(line)
 
             # -----------------------------
             # AAA
@@ -539,8 +553,9 @@ class FirewallAudit:
         print(f"Version  : {self.version}")
         print(f"Model    : {self.model}")
 
-        print("\nWhy this matters:")
-        print("  Firmware versions determine security features, support status and potential vulnerabilities.")
+        print(f"\n{self.COLOR_YELLOW}"
+            "Firmware versions affect security features, support status, and vulnerability \nexposure."
+            f"{self.COLOR_RESET}")
 
         # -----------------------------
         # Network Architecture
@@ -548,24 +563,23 @@ class FirewallAudit:
 
         self.section("2. NETWORK ARCHITECTURE")
 
-        vpn_zones = sum(1 for zone in self.zones if "vti" in zone.lower())
-
         print(f"Named Segments       : {len(self.nameifs)}")
         print(f"Security Zones       : {len(self.zones)}")
         print(f"Internet Interfaces  : {len(self.internet_interfaces)}")
-        print(f"VPN Zones            : {vpn_zones}")
+        print(f"VPN Zones            : {self.vpn_zones_count}")
         print(f"Management Interfaces: {len(self.management_interfaces)}")
 
-        self.subsection("SECURITY ZONE SUMMARY")
+        # To be implemented in the future for --network-architecture option 
+        # self.subsection("SECURITY ZONE SUMMARY")
 
-        for zone in sorted(self.zone_members):
+        # for zone in sorted(self.zone_members):
 
-            members = self.zone_members[zone]
-            count = len(members)
+        #     members = self.zone_members[zone]
+        #     count = len(members)
 
-            suffix = "IF" if count == 1 else "IFs"
+        #     suffix = "IF" if count == 1 else "IFs"
 
-            print(f"  - {zone} ({count} {suffix})")
+        #     print(f"  - {zone} ({count} {suffix})")
 
         if self.internet_interfaces:
             self.subsection("PUBLICLY EXPOSED NETWORKS")
@@ -583,89 +597,61 @@ class FirewallAudit:
             self.subsection("MANAGEMENT ACCESS")
 
             for entry in self.management_access:
-                print(f"  - {entry}")
+                print(f"  - {entry['network']} ({entry['interface']})")
+
+        print(
+            f"\n{self.COLOR_YELLOW}"
+            f"Understanding the architecture helps identify trust boundaries and assess how \ntraffic flows between them."
+            f"{self.COLOR_RESET}")
 
         # -----------------------------
-        # Access Control Lists (ACLs)
+        # Access Control
         # -----------------------------
 
         self.section("3. ACCESS CONTROL")
-        print(f"Network Objects : {self.object_count}")
-        print(f"Object Groups   : {self.object_group_count}")
-        print(f"ACL Entries     : {self.acl_count}")
-        print(f"Permit Rules    : {self.permit_rules}")
-        print(f"Deny Rules      : {self.deny_rules}")
-        print("\nExample Objects:\n")
-        
-        for obj in self.objects[:20]:
-            print(f" - {obj}")
-        
-        print("\nExample Object Groups:\n")
-        
-        for group in self.object_groups[:20]:
-            print(f" - {group}")
 
-        print("\nWhy this matters:")
-        print("Firewall rules determine who can communicate with whom.")
+        print(f"ACL Entries       : {self.acl_count}")
+        print(f"Permit Rules      : {self.permit_rules_count}")
+        print(f"Deny Rules        : {self.deny_rules_count}")
+        print(f"Network Objects   : {self.object_count}")
+        print(f"Object Groups     : {self.object_group_count}")
 
-        #
-        # ACLs
-        #
-        
-        self.section("4. ACL PREVIEW")
-        
-        print("\nFirst 20 ACL Entries:\n")
-        
-        for acl in self.acls[:20]:
-            print(f" {acl}")
-        
-        #
-        # ANY ANY
-        #
+        if self.any_any_rules:
+            self.subsection(f"ANY-ANY RULES ({len(self.any_any_rules)})")
 
-        self.section("5. POTENTIAL FINDINGS")
-
-        if self.review_rules:
-
-            print(f"Rules Requiring Review: {len(self.review_rules)}")
-            print()
-
-            for rule in self.review_rules[:10]:
-                print(f"  {rule}")
-                
+            for rule in self.any_any_rules:
+                print(f"  - {rule}")
         else:
-            print("No obvious 'permit ip any any' rules found.")
+            self.subsection("ANY-ANY RULES")
+            print("  None identified")
 
-        #
-        # VPN
-        #
+        # Later for --acl option
+        # if self.objects:
 
-        self.section("6. REMOTE CONNECTIVITY")
+        #     self.subsection("EXAMPLE OBJECTS")
 
-        print("\nVPN Pools:")
+        #     for obj in self.objects[:5]:
+        #         print(f"  - {obj}")
 
-        for pool in self.vpn_pools:
-            print(f"  - {pool}")
-        print("\nTunnel Interfaces:")
+        # if self.object_groups:
 
-        for tunnel in sorted(set(self.tunnels)):
-            print(f"  - {tunnel}")
-        print("\nDisabled Tunnels:")
+        #     self.subsection("EXAMPLE OBJECT GROUPS")
 
-        if self.disabled_tunnels:
-            for tunnel in self.disabled_tunnels:
-                print(f"  - {tunnel}")
-        else:
-            print("  None detected")
+        #     for group in self.object_groups[:5]:
+        #         print(f"  - {group}")
 
-        print("\nLearning:")
-        print("  VPN Pools = IP ranges given to remote users.")
-        print()
-        print("  Tunnel Interfaces = network-to-network VPNs.")
+        print(
+            f"\n{self.COLOR_YELLOW}"
+            "ACLs determine which systems can communicate and how traffic is permitted across \ntrust boundaries."
+            f"{self.COLOR_RESET}")
 
-        #
-        # AUTH
-        #
+        # -----------------------------
+        # VPN Security
+        # -----------------------------
+
+        # -----------------------------
+        # Authentication
+        # -----------------------------
 
         self.section("7. ADMINISTRATION & AUTHENTICATION")
         self.print_authentication()
