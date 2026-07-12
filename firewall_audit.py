@@ -73,18 +73,17 @@ class FirewallAudit:
 
         self.acls = []
 
-        # -----------------------------
-        # VPN Security
-        # -----------------------------
+        # --------------------------------------
+        # Virtual Private Network (VPN) Security
+        # --------------------------------------
 
-        # VPN Pools
+        # VPN Pools (Remote Access VPNs)
         self.vpn_pools = []
 
-        # Tunnel Descriptions
-        self.tunnels = []
-        self.tunnel_rules = []
+        # Site-to-Site VPNs
+        self.tunnel_descriptions = []
 
-        # Disabled Tunnels
+        # Disabled VPNs
         self.disabled_tunnels = []
 
         # -----------------------------
@@ -96,10 +95,14 @@ class FirewallAudit:
         self.radius = False
         self.saml = False
 
-        # AAA Infrastructure
-        self.tacacs_servers = set()
-        self.radius_servers = set()
-        self.ise_servers = set()
+        # Identify Providers
+        self.identity_providers = set()
+
+        # AAA Servers In Use
+        self.aaa_hosts = {}
+
+        # AAA Related Objects
+        self.aaa_related_objects = set()
 
         # -----------------------------
         # Monitoring & Logging
@@ -291,90 +294,82 @@ class FirewallAudit:
             # VPN Security
             # -----------------------------
 
-            # Tunnel Rules
-                if (
-                    " permit gre any any" in lowered
-                    or " permit ipinip any any" in lowered
-                    or " permit 41 any any" in lowered
-                ):
-                    self.tunnel_rules.append(line)
-            
-            # -----------------------------
-            # Disabled Tunnels
-            # -----------------------------
-
-            if (line == "shutdown" and current_is_tunnel and current_interface):
-                self.disabled_tunnels.append(current_interface)
-
-            # -----------------------------
-            # VPN Pools 
-            # -----------------------------
-
+            # VPN Pools (Remote Access VPNs)
             match = re.match(r"ip local pool\s+(\S+)",line)
 
             if match:
                 self.vpn_pools.append(match.group(1))
 
-            # -----------------------------
-            # Tunnel Descriptions 
-            # -----------------------------
-
+            # Tunnel Descriptions (Site-to-Site VPNs)
             if (line.startswith("description ") and "VTI" in line.upper()):
-
                 desc = (line.replace("description","").strip())
-                self.tunnels.append(desc)
+                self.tunnel_descriptions.append(desc)
+            
+            # Disabled Tunnels
+            if (line == "shutdown" and current_is_tunnel and current_interface):
+                self.disabled_tunnels.append(current_interface)
 
             # -----------------------------
-            # AAA
+            # Administrator Authentication
             # -----------------------------
 
             lowered = line.lower()
 
-            if "tacacs" in lowered:
+            # Authentication Methods
+            if line.startswith("aaa-server ") and "protocol tacacs+" in lowered:
                 self.tacacs = True
 
-            if "radius" in lowered:
+            if line.startswith("aaa-server ") and "protocol radius" in lowered:
                 self.radius = True
 
-            if "saml" in lowered:
+            if line.startswith("saml "):
                 self.saml = True
 
-            #---------------#
-            # Control Plane #
-            #---------------#
-            if "control-plane" in lowered and "access-group" in lowered:
-                self.control_plane_acl = line.strip()
+            # SAML Identity Providers
+            if "login.microsoftonline.com" in lowered:
+                self.identity_providers.add("Microsoft Entra ID")
+
+            if "okta" in lowered:
+                self.identity_providers.add("Okta")
+
+            if "pingidentity" in lowered:
+                self.identity_providers.add("Ping Identity")
             
-            #--------------------#
-            # AAA Infrastructure #
-            #--------------------#
+            # AAA Servers In Use
+            match = re.match(r"aaa-server\s+(\S+)\s+\((.+?)\)\s+host\s+(\S+)", line, re.IGNORECASE)
+
+            if match:
+                server_group = match.group(1).upper()
+                host = match.group(3)
+                self.aaa_hosts[server_group] = host
+
+            # AAA Related Objects
             if line.startswith("object network"):
 
                 name = line.split()[-1]
-
                 upper_name = name.upper()
 
-                if "TACACS" in upper_name:
-                    self.tacacs_servers.add(name)
+                if ("TACACS" in upper_name
+                    or "RADIUS" in upper_name
+                    or "ISE" in upper_name
+                    or "NPS" in upper_name
+                    or "LDAP" in upper_name
+                    or "ENTRA" in upper_name
+                    or "ACTIVE-DIRECTORY" in upper_name):
 
-                if "RADIUS" in upper_name:
-                    self.radius_servers.add(name)
+                    self.aaa_related_objects.add(name)
 
-                if "ISE" in upper_name:
-                    self.ise_servers.add(name)
+            # -----------------------------
+            # Monitoring
+            # -----------------------------
 
-            #------------#
-            # Monitoring #
-            #------------#
             if "snmp" in lowered:
                 self.snmp = True
 
             if "syslog" in lowered:
                 self.syslog = True
 
-            #---------------------------#
             # Monitoring Infrastructure #
-            #---------------------------#
             upper = line.upper()
 
             if line.startswith("object network"):
@@ -393,23 +388,20 @@ class FirewallAudit:
                     self.monitoring_platforms.add(name)
 
             if line.startswith("object-group network"):
-
                 name = line.split()[-1]
-
                 upper_name = name.upper()
 
-                if (
-                    "SOLARWINDS" in upper_name
+                if ("SOLARWINDS" in upper_name
                     or "SYSLOG" in upper_name
                     or "ALERT-LOGIC" in upper_name
                     or upper_name.startswith("LM-")
-                    or "NOC" in upper_name
-                ):
+                    or "NOC" in upper_name):
                     self.monitoring_platforms.add(name)
 
-            #---------#
-            # Logging #
-            #---------#
+            # -----------------------------
+            # Logging
+            # -----------------------------
+
             if line.startswith("logging enable"):
                 self.logging_enabled = True
 
@@ -462,39 +454,9 @@ class FirewallAudit:
             ):
                 self.nat = True
 
-    def print_authentication(self):
-
-        print(f"TACACS : {'Yes' if self.tacacs else 'No'}")
-        print(f"RADIUS : {'Yes' if self.radius else 'No'}")
-        print(f"SAML   : {'Yes' if self.saml else 'No'}")
-
-        if self.tacacs_servers:
-
-            print("\nTACACS Servers:")
-
-            for server in sorted(self.tacacs_servers):
-                print(f"  - {server}")
-
-        if self.radius_servers:
-
-            print("\nRADIUS Services:")
-
-            for server in sorted(self.radius_servers):
-                print(f"  - {server}")
-
-        if self.ise_servers:
-
-            print("\nCisco ISE Servers:")
-
-            for server in sorted(self.ise_servers):
-                print(f"  - {server}")
-
-        print("\nLearning:")
-        print("  TACACS is commonly used for administrator authentication.")
-        print()
-        print("  RADIUS is often used with MFA solutions.")
-        print()
-        print("  SAML typically indicates Azure AD / Entra integration.")
+            # Management Plane Security (Control Plane)
+            if "control-plane" in lowered and "access-group" in lowered:
+                self.control_plane_acl = line.strip()
 
     def print_logging(self):
 
@@ -649,13 +611,75 @@ class FirewallAudit:
         # VPN Security
         # -----------------------------
 
+        self.section("4. VPN SECURITY")
+
+        print(f"Remote Access VPN Pools : {len(self.vpn_pools)}")
+        print(f"Site-to-Site VPNs       : {len(self.tunnel_descriptions)}")
+        print(f"Disabled VPNs           : {len(self.disabled_tunnels)}")
+
+        if self.vpn_pools:
+            self.subsection(f"REMOTE ACCESS VPNS ({len(self.vpn_pools)})")
+
+            for pool in self.vpn_pools:
+                print(f"  - {pool}")
+
+        if self.tunnel_descriptions:
+            self.subsection(f"SITE-TO-SITE VPNS ({len(self.tunnel_descriptions)})")
+
+            for tunnel in self.tunnel_descriptions:
+                print(f"  - {tunnel}")
+
+        if self.disabled_tunnels:
+            self.subsection(f"DISABLED VPNS ({len(self.disabled_tunnels)})")
+
+            for tunnel in self.disabled_tunnels:
+                print(f"  - {tunnel}")
+
+        print(f"\n{self.COLOR_YELLOW}"
+            "VPNs extend trust boundaries by providing remote users and external "
+            "\nnetworks access to internal resources."
+            f"{self.COLOR_RESET}")
+
         # -----------------------------
-        # Authentication
+        # Administrator Authentication
         # -----------------------------
 
-        self.section("7. ADMINISTRATION & AUTHENTICATION")
-        self.print_authentication()
+        self.section("5. ADMINISTRATION & AUTHENTICATION")
+        
+        self.subsection("AUTHENTICATION METHODS")
 
+        print(f"TACACS+ : {'Yes' if self.tacacs else 'No'}")
+        print(f"RADIUS : {'Yes' if self.radius else 'No'}")
+        print(f"SAML   : {'Yes' if self.saml else 'No'}")
+            
+        self.subsection("AAA SERVERS IN USE")
+
+        if self.aaa_hosts:
+
+            for aaa_type, host in sorted(self.aaa_hosts.items()):
+                print(f"  - {aaa_type:<7} : {host}")
+
+        else:
+            print("  None identified")
+
+        if self.identity_providers:
+
+            self.subsection("SAML IDENTITY PROVIDERS")
+
+            for provider in sorted(self.identity_providers):
+                print(f"  - {provider}")
+
+        if self.aaa_related_objects:
+
+            self.subsection("AAA RELATED OBJECTS")
+
+            for obj in sorted(self.aaa_related_objects):
+                print(f"  - {obj}")
+
+        print(f"\n{self.COLOR_YELLOW}"
+            "Centralised AAA reduces reliance on local accounts "
+            "and improves authentication, \nauthorisation, and auditing."
+        f"{self.COLOR_RESET}")
 
         #
         # ROUTING / NAT
@@ -731,7 +755,7 @@ class FirewallAudit:
         print()
         print("2. VPN Architecture")
         print(f"   -> {len(self.vpn_pools)} VPN pools")
-        print(f"   -> {len(self.tunnels)} tunnel definitions")
+        print(f"   -> {len(self.tunnel_descriptions)} tunnel definitions")
         print()
         print("3. Firewall Rules")
         print(f"   -> {self.acl_count} ACL entries")
