@@ -63,15 +63,16 @@ class FirewallAudit:
         self.object_groups = []
 
         # Access Control Lists (ACLs)
+        self.acls = []
         self.acl_count = 0
+
+        # ACLs Applied to Interfaces
+        self.interface_acls = set()
 
         self.permit_rules_count = 0
         self.deny_rules_count = 0
-        self.permit_rules_count = 0
 
         self.any_any_rules = []
-
-        self.acls = []
 
         # --------------------------------------
         # Virtual Private Network (VPN) Security
@@ -79,6 +80,14 @@ class FirewallAudit:
 
         # VPN Pools (Remote Access VPNs)
         self.vpn_pools = []
+
+        # WebVPN
+        self.webvpn = False
+
+        self.webvpn_hsts = False
+        self.webvpn_csp = False
+        self.webvpn_tls = False
+        self.webvpn_ciphers = set()
 
         # Site-to-Site VPNs
         self.tunnel_descriptions = []
@@ -105,42 +114,37 @@ class FirewallAudit:
         self.aaa_related_objects = set()
 
         # -----------------------------
-        # Monitoring & Logging
+        # Control Plane Protection
         # -----------------------------
 
-        # Monitoring
-        self.snmp = False
+        self.control_plane_acl = None
 
-        # Monitoring Infrastructure
-        self.monitoring_platforms = set()
-
+        # -----------------------------
         # Logging
+        # -----------------------------
+
         self.syslog = False
         self.logging_enabled = False
         self.logging_destinations = set()
 
         # -----------------------------
-        # Control Plane Protection
+        # Monitoring
         # -----------------------------
 
-        # Control Plane
-        self.control_plane_acl = None
+        # SNPM
+        self.snmp = False
 
-        # WebVPN
-        self.webvpn_hsts = False
-        self.webvpn_csp = False
-        self.webvpn_tls = False
-        self.webvpn_ciphers = set()
+        # Monitoring Infrastructure
+        self.monitoring_platforms = set()
 
-        # -----------------------------
-        # Network Services
-        # -----------------------------
-
-        # Routing
-        self.bgp = False
-
+        # ----------------------------------
         # Network Address Translation (NAT)
+        # ----------------------------------
+
         self.nat = False
+        
+        self.dynamic_nat = 0
+        self.static_nat = 0
 
     # Parsing the configuration file
     def parse(self, filepath):
@@ -270,7 +274,6 @@ class FirewallAudit:
             if line.startswith("access-list "):
 
                 lowered = line.lower()
-
                 self.acls.append(line)
                 self.acl_count += 1
 
@@ -282,13 +285,10 @@ class FirewallAudit:
                 if " deny " in lowered:
                     self.deny_rules_count += 1
 
-                # Any-Any Rules
-                if (
-                    " permit ip any any" in lowered
-                    or " permit tcp any any" in lowered
-                    or " permit udp any any" in lowered
-                ):
-                    self.any_any_rules.append(line)
+            if line.startswith("access-group") and " interface " in line:
+                parts = line.split()
+                acl_name = parts[1]
+                self.interface_acls.add(acl_name)
 
             # -----------------------------
             # VPN Security
@@ -299,6 +299,19 @@ class FirewallAudit:
 
             if match:
                 self.vpn_pools.append(match.group(1))
+
+            # WebVPN
+            if line.startswith("webvpn"):
+                self.webvpn = True
+
+            if "hsts-server" in lowered or "hsts-client" in lowered:
+                self.webvpn_hsts = True
+
+            if "content-security-policy" in lowered:
+                self.webvpn_csp = True
+
+            if line.startswith("ssl cipher tlsv1.2"):
+                self.webvpn_tls = True
 
             # Tunnel Descriptions (Site-to-Site VPNs)
             if (line.startswith("description ") and "VTI" in line.upper()):
@@ -360,14 +373,33 @@ class FirewallAudit:
                     self.aaa_related_objects.add(name)
 
             # -----------------------------
+            # Control Plane Security
+            # -----------------------------
+
+            if "control-plane" in lowered and "access-group" in lowered:
+                self.control_plane_acl = line.strip()
+
+            # -----------------------------
+            # Logging
+            # -----------------------------
+
+            if line.startswith("logging enable"):
+                self.logging_enabled = True
+
+            if line.startswith("logging host "):
+                parts = line.split()
+
+                if len(parts) >= 4:
+                    interface = parts[2]
+                    host = parts[3]
+                    self.logging_destinations.add(f"{interface} : {host}")
+
+            # -----------------------------
             # Monitoring
             # -----------------------------
 
-            if "snmp" in lowered:
+            if line.startswith("snmp-server"):
                 self.snmp = True
-
-            if "syslog" in lowered:
-                self.syslog = True
 
             # Monitoring Infrastructure #
             upper = line.upper()
@@ -380,7 +412,6 @@ class FirewallAudit:
 
                 if (
                     "SOLARWINDS" in upper_name
-                    or "SYSLOG" in upper_name
                     or "ALERT-LOGIC" in upper_name
                     or upper_name.startswith("LM-")
                     or "NOC" in upper_name
@@ -392,104 +423,47 @@ class FirewallAudit:
                 upper_name = name.upper()
 
                 if ("SOLARWINDS" in upper_name
-                    or "SYSLOG" in upper_name
                     or "ALERT-LOGIC" in upper_name
                     or upper_name.startswith("LM-")
                     or "NOC" in upper_name):
                     self.monitoring_platforms.add(name)
 
-            # -----------------------------
-            # Logging
-            # -----------------------------
+            # ----------------------------------
+            # Network Address Translation (NAT)
+            # ----------------------------------
 
-            if line.startswith("logging enable"):
-                self.logging_enabled = True
-
-            if line.startswith("object network"):
-
-                name = line.split()[-1]
-
-                if "SYSLOG" in name.upper():
-                    self.logging_destinations.add(name)
-
-            if line.startswith("object-group network"):
-
-                name = line.split()[-1]
-
-                if "SYSLOG" in name.upper():
-                    self.logging_destinations.add(name)
-
-            #--------#
-            # WebVPN #
-            #--------#
-            if "hsts-server" in lowered or "hsts-client" in lowered:
-                self.webvpn_hsts = True
-
-            if "content-security-policy" in lowered:
-                self.webvpn_csp = True
-
-            if line.startswith("ssl cipher tlsv1.2"):
-                self.webvpn_tls = True
-
-                if '"' in line:
-                    cipher_string = line.split('"')[1]
-
-                    for cipher in cipher_string.split(":"):
-                        self.webvpn_ciphers.add(cipher.strip())
-
-            #---------#
-            # Routing #
-            #---------#
-            if line.startswith(
-                "router bgp"
-            ):
-                self.bgp = True
-
-            #-----#
-            # NAT #
-            #-----#
-            if (
-                line.startswith("nat ")
-                or " nat " in f" {line} "
-            ):
+            if (line.startswith("nat ") or " nat " in f" {line} "):
                 self.nat = True
+                lowered = line.lower()
 
-            # Management Plane Security (Control Plane)
-            if "control-plane" in lowered and "access-group" in lowered:
-                self.control_plane_acl = line.strip()
+                if " dynamic " in lowered:
+                    self.dynamic_nat += 1
 
-    def print_logging(self):
+                if " static " in lowered:
+                    self.static_nat += 1
 
-        print(f"Logging Enabled : {'Yes' if self.logging_enabled else 'No'}")
+        # -----------------------------
+        # Post-Processing
+        # -----------------------------
 
-        if self.logging_destinations:
+        # Build Any-Any Findings (Interface ACLs Only)
+        for acl in self.acls:
 
-            print("\nLogging Destinations:")
+            parts = acl.split()
+            acl_name = parts[1]
+            lowered = acl.lower()
 
-            for destination in sorted(self.logging_destinations):
-                print(f"  - {destination}")
+            if (
+                acl_name in self.interface_acls
+                and (
+                    " permit ip any any" in lowered
+                    or " permit tcp any any" in lowered
+                    or " permit udp any any" in lowered
+                )
+            ):
+                self.any_any_rules.append(acl)
 
-
-    def print_webvpn(self):
-
-        print(f"HSTS                 : {'Yes' if self.webvpn_hsts else 'No'}")
-        print(f"Content Security     : {'Yes' if self.webvpn_csp else 'No'}")
-        print(f"TLS 1.2 Configured   : {'Yes' if self.webvpn_tls else 'No'}")
-
-        if self.webvpn_ciphers:
-
-            print("\nTLS Cipher Suites:")
-
-            for cipher in sorted(self.webvpn_ciphers):
-                print(f"  - {cipher}")
-
-        print("\nLearning:")
-        print("  HSTS helps prevent protocol downgrade attacks.")
-        print()
-        print("  Content Security Policy helps reduce browser-based attacks.")
-        print()
-        print("  Restricting TLS cipher suites improves cryptographic security.")
-
+    # Section formatting
     def section(self, title):
 
         print()
@@ -497,10 +471,12 @@ class FirewallAudit:
         print(f"{self.COLOR_BOLD}{title}{self.COLOR_RESET}")
         print(f"{self.COLOR_BLUE}{'=' * 80}{self.COLOR_RESET}")
 
+    # Subsection formatting
     def subsection(self, title):
 
         print(f"\n{self.COLOR_CYAN}{title}{self.COLOR_RESET}\n")
 
+    # Report output formatting
     def report(self):
 
         self.section("FIREWALL AUDIT - CONFIGURATION OVERVIEW")
@@ -509,7 +485,7 @@ class FirewallAudit:
         # Device Information
         # -----------------------------
 
-        self.section("1. DEVICE INFORMATION")
+        self.section("DEVICE INFORMATION")
 
         print(f"Hostname : {self.hostname}")
         print(f"Version  : {self.version}")
@@ -523,7 +499,7 @@ class FirewallAudit:
         # Network Architecture
         # -----------------------------
 
-        self.section("2. NETWORK ARCHITECTURE")
+        self.section("NETWORK ARCHITECTURE")
 
         print(f"Named Segments       : {len(self.nameifs)}")
         print(f"Security Zones       : {len(self.zones)}")
@@ -570,7 +546,7 @@ class FirewallAudit:
         # Access Control
         # -----------------------------
 
-        self.section("3. ACCESS CONTROL")
+        self.section("ACCESS CONTROL")
 
         print(f"ACL Entries       : {self.acl_count}")
         print(f"Permit Rules      : {self.permit_rules_count}")
@@ -611,24 +587,37 @@ class FirewallAudit:
         # VPN Security
         # -----------------------------
 
-        self.section("4. VPN SECURITY")
+        self.section("VPN SECURITY")
 
         print(f"Remote Access VPN Pools : {len(self.vpn_pools)}")
+        print(f"WebVPN Enabled          : {'Yes' if self.webvpn else 'No'}")
         print(f"Site-to-Site VPNs       : {len(self.tunnel_descriptions)}")
         print(f"Disabled VPNs           : {len(self.disabled_tunnels)}")
 
+        # Remote Access VPNs
         if self.vpn_pools:
             self.subsection(f"REMOTE ACCESS VPNS ({len(self.vpn_pools)})")
 
             for pool in self.vpn_pools:
                 print(f"  - {pool}")
 
+        # WebVPN
+        if self.webvpn:
+
+            self.subsection("WEBVPN")
+
+            print(f"HSTS               : {'Yes' if self.webvpn_hsts else 'No'}")
+            print(f"Content Security   : {'Yes' if self.webvpn_csp else 'No'}")
+            print(f"TLS 1.2 Configured : {'Yes' if self.webvpn_tls else 'No'}")
+
+        # Site-to-Site VPNs
         if self.tunnel_descriptions:
             self.subsection(f"SITE-TO-SITE VPNS ({len(self.tunnel_descriptions)})")
 
             for tunnel in self.tunnel_descriptions:
                 print(f"  - {tunnel}")
 
+        # Disabled Tunnels
         if self.disabled_tunnels:
             self.subsection(f"DISABLED VPNS ({len(self.disabled_tunnels)})")
 
@@ -644,7 +633,7 @@ class FirewallAudit:
         # Administrator Authentication
         # -----------------------------
 
-        self.section("5. ADMINISTRATION & AUTHENTICATION")
+        self.section("ADMINISTRATION & AUTHENTICATION")
         
         self.subsection("AUTHENTICATION METHODS")
 
@@ -681,93 +670,86 @@ class FirewallAudit:
             "and improves authentication, \nauthorisation, and auditing."
         f"{self.COLOR_RESET}")
 
-        #
-        # ROUTING / NAT
-        #
-
-        self.section("8. NETWORK SERVICES")
-        print(f"BGP : {'Yes' if self.bgp else 'No'}")
-        print(f"NAT : {'Yes' if self.nat else 'No'}")
-
-        print("\nLearning:")
-        print("  NAT maps one address space to another.")
-        print()
-        print("  Routing determines where traffic travels.")
-
-        #
-        # MONITORING
-        #
-
-        self.section("9. MONITORING")
-
-        print(f"SNMP   : {'Yes' if self.snmp else 'No'}")
-        print(f"Syslog : {'Yes' if self.syslog else 'No'}")
-
-        if self.monitoring_platforms:
-
-            print("\nMonitoring Platforms:")
-
-            for platform in sorted(self.monitoring_platforms):
-                print(f"  - {platform}")
-
-        print("\nLearning:")
-        print("  SNMP is used for monitoring.")
-        print()
-        print("  Syslog exports security")
-        print("  and operational events.")
-
-        #
-        # LOGGING
-        #
-
-        self.section("10. LOGGING")
-        self.print_logging()
-
-        #
-        # WEBVPN
-        #
-
-        self.section("8. WEBVPN SECURITY")
-        self.print_webvpn()
-
-        #
-        # CONTROL PLANE
-        #
+        # -----------------------------
+        # Control Plane Security
+        # -----------------------------
 
         self.section("CONTROL PLANE PROTECTION")
 
         if self.control_plane_acl:
+            parts = self.control_plane_acl.split()
+            acl_name = parts[1]
+            interface = parts[4]
 
-            print("Control Plane ACL:")
-            print(f"  {self.control_plane_acl}")
+            print(f"Control Plane ACL : {acl_name}")
+            print(f"Protected Interface: {interface}")
 
         else:
+            print("Control Plane ACL : None")
 
-            print("No control-plane ACL identified.")
+        print(f"\n{self.COLOR_YELLOW}"
+                "Control Plane ACLs restrict traffic destined to the firewall itself rather than"
+                "\ntraffic traversing the firewall."
+            f"{self.COLOR_RESET}")
+        
+        # -----------------------------
+        # Logging
+        # -----------------------------
 
-        #
-        # ROADMAP
-        #
+        self.section("LOGGING")
 
-        self.section("10. WHAT SHOULD I LOOK AT NEXT?")
-        print("1. Internet-Facing Interfaces")
-        print(f"   -> {len(self.internet_interfaces)} found")
-        print()
-        print("2. VPN Architecture")
-        print(f"   -> {len(self.vpn_pools)} VPN pools")
-        print(f"   -> {len(self.tunnel_descriptions)} tunnel definitions")
-        print()
-        print("3. Firewall Rules")
-        print(f"   -> {self.acl_count} ACL entries")
-        print()
-        print("4. Authentication Controls")
-        print(f"   -> TACACS={self.tacacs}, "f"RADIUS={self.radius}, "f"SAML={self.saml}")
-        print()
-        print("5. Monitoring")
-        print(f"   -> SNMP={self.snmp}, "f"Syslog={self.syslog}")
-        print()
-        print("Goal: Understand the architecture before attempting to identify security findings.")
+        print(f"Logging Enabled : {'Yes' if self.logging_enabled else 'No'}")
 
+        if self.logging_destinations:
+
+            self.subsection("SYSLOG SERVERS")
+
+            for destination in sorted(self.logging_destinations):
+                print(f"  - {destination}")
+        else:
+            self.subsection("SYSLOG SERVERS")
+            print("  None identified")
+
+        print(f"\n{self.COLOR_YELLOW}"
+            "Logging provides visibility into security events, "
+            "administrative actions, \nand policy violations."
+            f"{self.COLOR_RESET}")
+        
+        # -----------------------------
+        # Monitoring
+        # -----------------------------
+
+        self.section("MONITORING")
+
+        print(f"SNMP   : {'Yes' if self.snmp else 'No'}")
+
+        if self.monitoring_platforms:
+            self.subsection("MONITORING PLATFORMS")
+
+            for platform in sorted(self.monitoring_platforms):
+                print(f"  - {platform}")
+
+        print(f"\n{self.COLOR_YELLOW}"
+            "Monitoring provides visibility into firewall "
+            "health, performance, and \navailability."
+            f"{self.COLOR_RESET}")
+
+        # ----------------------------------
+        # Network Address Translation (NAT)
+        # ----------------------------------
+
+        self.section("NAT")
+
+        print(f"NAT Enabled : {'Yes\n' if self.nat else 'No\n'}")
+
+        if self.nat:
+            print(f"Dynamic NAT Rules : {self.dynamic_nat}")
+            print(f"Static NAT Rules  : {self.static_nat}")
+
+        print(f"\n{self.COLOR_YELLOW}"
+            "NAT determines how traffic is translated between networks "
+            "but does not control \nwhether the traffic is permitted."
+            f"{self.COLOR_RESET}")
 
 def main():
 
