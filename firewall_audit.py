@@ -23,6 +23,7 @@ class FirewallAudit:
         self.hostname = None
         self.version = None
         self.model = None
+        self.vendor = "Unknown"
 
         # -----------------------------
         # Network Architecture
@@ -153,8 +154,75 @@ class FirewallAudit:
         current_is_tunnel = False
         current_zone = None
 
+        current_forti_interface = False
+
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
+
+        # -----------------------------
+        # Vendor Detection
+        # -----------------------------
+
+        fortinet_score = 0
+        cisco_score = 0
+
+        for raw_line in lines:
+            line = raw_line.strip()
+
+            # FortiGate fingerprints
+            if line.startswith("config system interface"):
+                fortinet_score += 5
+
+            elif line.startswith("config firewall policy"):
+                fortinet_score += 5
+
+            elif line.startswith("config firewall address"):
+                fortinet_score += 5
+
+            elif line.startswith("config firewall addrgrp"):
+                fortinet_score += 5
+
+            elif line.startswith("config vpn ipsec phase1-interface"):
+                fortinet_score += 5
+
+            elif line.startswith("config vpn ssl settings"):
+                fortinet_score += 5
+
+            elif line.startswith("config user radius"):
+                fortinet_score += 3
+
+            elif line.startswith("config system snmp"):
+                fortinet_score += 3
+
+            # Cisco ASA / FTD fingerprints
+            if line.startswith("nameif "):
+                cisco_score += 5
+
+            elif line.startswith("access-list "):
+                cisco_score += 5
+
+            elif line.startswith("object network "):
+                cisco_score += 5
+
+            elif line.startswith("object-group "):
+                cisco_score += 5
+
+            elif line.startswith("aaa-server "):
+                cisco_score += 5
+
+            elif line.startswith("webvpn"):
+                cisco_score += 5
+
+            elif line.startswith("tunnel-group "):
+                cisco_score += 5
+
+        # Determine vendor
+
+        if fortinet_score > cisco_score:
+            self.vendor = "Fortinet"
+
+        elif cisco_score > fortinet_score:
+            self.vendor = "Cisco"    
 
         for raw_line in lines:
 
@@ -165,24 +233,30 @@ class FirewallAudit:
             # Device Information
             # -----------------------------
 
+            # Cisco Model
             if ("Cisco Firepower" in line and "Threat Defense" in line):
                 self.model = line
 
-            # Hostname
+            # Cisco Hostname
             match = re.match(r"hostname\s+(.+)", line)
             if match:
                 self.hostname = match.group(1)
 
-            # Version
+            # Cisco Version
             match = re.match(r"NGFW Version\s+(.+)", line)
             if match:
                 self.version = match.group(1)
+
+            # FortiGate Hostname
+            match = re.match(r"set hostname \"?(.+?)\"?$", line)
+            if match:
+                self.hostname = match.group(1)
 
             # -----------------------------
             # Network Architecture
             # -----------------------------
 
-            # Network Identification
+            # Cisco ASA / FTD Interfaces
             match = re.match(r"interface\s+(.+)",line)
 
             if match:
@@ -190,7 +264,7 @@ class FirewallAudit:
                 self.interfaces.append(current_interface)
                 current_is_tunnel = (current_interface.startswith("Tunnel"))
 
-            # Interface Names
+            # Cisco Interface Names
             match = re.match(r"nameif\s+(.+)", line)
 
             if match:
@@ -202,6 +276,30 @@ class FirewallAudit:
 
                 if ("mgt" in nameif.lower() or "management" in nameif.lower()):
                     self.management_interfaces.append(nameif)
+
+            # FortiGate Interfaces
+            if line == "config system interface":
+                current_forti_interface = True
+
+            elif current_forti_interface and line == "end":
+                current_forti_interface = False
+
+            match = re.match(r'edit\s+"(.+)"', line)
+
+            if current_forti_interface and match:
+
+                interface_name = match.group(1)
+
+                self.interfaces.append(interface_name)
+                self.nameifs.append(interface_name)
+
+                lowered_name = interface_name.lower()
+
+                if lowered_name.startswith("wan"):
+                    self.internet_interfaces.append(interface_name)
+
+                if "mgmt" in lowered_name or "management" in lowered_name:
+                    self.management_interfaces.append(interface_name)
 
             # Security Zones
 
@@ -487,9 +585,10 @@ class FirewallAudit:
 
         self.section("DEVICE INFORMATION")
 
-        print(f"Hostname : {self.hostname}")
-        print(f"Version  : {self.version}")
-        print(f"Model    : {self.model}")
+        print(f"Vendor   : {self.vendor}")
+        print(f"Hostname : {self.hostname or 'Unknown'}")
+        print(f"Version  : {self.version or 'Unknown'}")
+        print(f"Model    : {self.model or 'Unknown'}")
 
         print(f"\n{self.COLOR_YELLOW}"
             "Firmware versions affect security features, support status, and vulnerability \nexposure."

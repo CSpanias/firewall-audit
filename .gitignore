@@ -18,3 +18,4 @@ dist/
 
 # Keep documentation
 !README.md
+!sample-cisco-ftd.conf
