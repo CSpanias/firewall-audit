@@ -67,11 +67,14 @@ class FirewallAudit:
         self.acls = []
         self.acl_count = 0
 
+        self.forti_policies = []
+
         # ACLs Applied to Interfaces
         self.interface_acls = set()
 
         self.permit_rules_count = 0
         self.deny_rules_count = 0
+        self.disabled_policy_count = 0
 
         self.any_any_rules = []
 
@@ -96,6 +99,10 @@ class FirewallAudit:
         # Disabled VPNs
         self.disabled_tunnels = []
 
+        # FortiGate VPN Definitions
+        self.forti_vpns = []
+        self.ssl_vpn_port = None
+
         # -----------------------------
         # Administrator Authentication
         # -----------------------------
@@ -118,7 +125,11 @@ class FirewallAudit:
         # Control Plane Protection
         # -----------------------------
 
+        # Cisco
         self.control_plane_acl = None
+        
+        # Fortinet
+        self.control_plane_interfaces = []
 
         # -----------------------------
         # Logging
@@ -132,7 +143,7 @@ class FirewallAudit:
         # Monitoring
         # -----------------------------
 
-        # SNPM
+        # SNMP
         self.snmp = False
 
         # Monitoring Infrastructure
@@ -150,11 +161,49 @@ class FirewallAudit:
     # Parsing the configuration file
     def parse(self, filepath):
 
+        # State Variables
         current_interface = None
         current_is_tunnel = False
         current_zone = None
 
-        current_forti_interface = False
+        inside_forti_interfaces = False
+        inside_forti_zones = False
+
+        current_forti_zone = None
+
+        inside_forti_addresses = False
+        inside_forti_addrgrp = False
+
+        inside_forti_policy = False
+
+        current_forti_policy_disabled = False
+        current_forti_policy_action = None
+
+        current_forti_policy_id = None
+        current_forti_policy_srcaddr = None
+        current_forti_policy_dstaddr = None
+        current_forti_policy_service = None
+
+        inside_forti_phase1 = False
+
+        current_forti_vpn = None
+        current_forti_vpn_disabled = False
+        inside_forti_ssl_vpn = False
+
+        inside_forti_radius = False
+        inside_forti_ldap = False
+
+        current_forti_radius = None
+        current_forti_ldap = None
+
+        current_forti_interface_name = None
+
+        inside_forti_syslog = False
+
+        inside_forti_snmp = False
+        inside_forti_snmp_hosts = False
+
+        inside_forti_vip = False
 
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
@@ -163,66 +212,41 @@ class FirewallAudit:
         # Vendor Detection
         # -----------------------------
 
-        fortinet_score = 0
-        cisco_score = 0
+        vendor_fingerprints = {
+            "Fortinet": [
+                "config system interface",
+                "config firewall policy",
+                "config firewall address",
+                "config firewall addrgrp",
+                "config vpn ipsec phase1-interface",
+                "config vpn ssl settings",
+                "config user radius",
+                "config system snmp"
+            ],
+
+            "Cisco": [
+                "nameif ",
+                "access-list ",
+                "object network ",
+                "object-group ",
+                "aaa-server ",
+                "webvpn",
+                "tunnel-group "
+            ]
+        }
+
+        scores = {vendor: 0 for vendor in vendor_fingerprints}
 
         for raw_line in lines:
             line = raw_line.strip()
 
-            # FortiGate fingerprints
-            if line.startswith("config system interface"):
-                fortinet_score += 5
+            for vendor, fingerprints in vendor_fingerprints.items():
+                for fp in fingerprints:
+                    if line.startswith(fp):
+                        scores[vendor] += 1
 
-            elif line.startswith("config firewall policy"):
-                fortinet_score += 5
-
-            elif line.startswith("config firewall address"):
-                fortinet_score += 5
-
-            elif line.startswith("config firewall addrgrp"):
-                fortinet_score += 5
-
-            elif line.startswith("config vpn ipsec phase1-interface"):
-                fortinet_score += 5
-
-            elif line.startswith("config vpn ssl settings"):
-                fortinet_score += 5
-
-            elif line.startswith("config user radius"):
-                fortinet_score += 3
-
-            elif line.startswith("config system snmp"):
-                fortinet_score += 3
-
-            # Cisco ASA / FTD fingerprints
-            if line.startswith("nameif "):
-                cisco_score += 5
-
-            elif line.startswith("access-list "):
-                cisco_score += 5
-
-            elif line.startswith("object network "):
-                cisco_score += 5
-
-            elif line.startswith("object-group "):
-                cisco_score += 5
-
-            elif line.startswith("aaa-server "):
-                cisco_score += 5
-
-            elif line.startswith("webvpn"):
-                cisco_score += 5
-
-            elif line.startswith("tunnel-group "):
-                cisco_score += 5
-
-        # Determine vendor
-
-        if fortinet_score > cisco_score:
-            self.vendor = "Fortinet"
-
-        elif cisco_score > fortinet_score:
-            self.vendor = "Cisco"    
+        if max(scores.values()) > 0:
+            self.vendor = max(scores, key=scores.get)  
 
         for raw_line in lines:
 
@@ -233,21 +257,23 @@ class FirewallAudit:
             # Device Information
             # -----------------------------
 
-            # Cisco Model
+            # Cisco Device Information
             if ("Cisco Firepower" in line and "Threat Defense" in line):
                 self.model = line
 
-            # Cisco Hostname
+            # Hostname
             match = re.match(r"hostname\s+(.+)", line)
             if match:
                 self.hostname = match.group(1)
 
-            # Cisco Version
+            # Version
             match = re.match(r"NGFW Version\s+(.+)", line)
             if match:
                 self.version = match.group(1)
 
-            # FortiGate Hostname
+            # FortiGate Device Information
+
+            # Hostname
             match = re.match(r"set hostname \"?(.+?)\"?$", line)
             if match:
                 self.hostname = match.group(1)
@@ -257,18 +283,19 @@ class FirewallAudit:
             # -----------------------------
 
             # Cisco ASA / FTD Interfaces
-            match = re.match(r"interface\s+(.+)",line)
+            match = re.match(r"interface\s+(.+)", line)
 
             if match:
                 current_interface = match.group(1)
                 self.interfaces.append(current_interface)
                 current_is_tunnel = (current_interface.startswith("Tunnel"))
 
-            # Cisco Interface Names
+            # Cisco ASA / FTD Interface Names
             match = re.match(r"nameif\s+(.+)", line)
 
             if match:
                 nameif = match.group(1)
+
                 self.nameifs.append(nameif)
 
                 if "internet" in nameif.lower():
@@ -277,18 +304,70 @@ class FirewallAudit:
                 if ("mgt" in nameif.lower() or "management" in nameif.lower()):
                     self.management_interfaces.append(nameif)
 
+            # Cisco ASA / FTD Security Zones
+
+            # Leave the current zone block
+            if line.startswith("object-group ") and "security-zone" not in line:
+                current_zone = None
+
+            # Zone Definition
+            zone_match = re.match(r"object-group interface (.+?) security-zone", line)
+
+            if zone_match:
+                current_zone = zone_match.group(1)
+
+                self.zones.add(current_zone)
+
+                if current_zone not in self.zone_members:
+                    self.zone_members[current_zone] = []
+
+            # Zone Members
+            member_match = re.match(r"interface-object interface-name (.+)", line)
+
+            if member_match and current_zone:
+                self.zone_members[current_zone].append(member_match.group(1))
+
+            # Cisco ASA / FTD VPN Termination Interfaces
+            match = re.match(r"tunnel source interface (.+)", line)
+
+            if match:
+                source_interface = match.group(1)
+
+                if "internet" in source_interface.lower():
+                    self.internet_vpn_termination.append(source_interface)
+
+            # Cisco ASA / FTD Management Access
+            if line.startswith("ssh "):
+
+                parts = line.split()
+
+                if len(parts) >= 4:
+
+                    network = ipaddress.IPv4Network(
+                        f"{parts[1]}/{parts[2]}",
+                        strict=False
+                    )
+
+                    self.management_access.append({
+                        "network": str(network),
+                        "interface": parts[3]
+                    })
+
             # FortiGate Interfaces
             if line == "config system interface":
-                current_forti_interface = True
+                inside_forti_interfaces = True
 
-            elif current_forti_interface and line == "end":
-                current_forti_interface = False
+            elif inside_forti_interfaces and line == "end":
+                inside_forti_interfaces = False
 
+            # FortiGate Interface Names
             match = re.match(r'edit\s+"(.+)"', line)
 
-            if current_forti_interface and match:
+            if inside_forti_interfaces and match:
 
                 interface_name = match.group(1)
+
+                current_forti_interface_name = interface_name
 
                 self.interfaces.append(interface_name)
                 self.nameifs.append(interface_name)
@@ -298,80 +377,68 @@ class FirewallAudit:
                 if lowered_name.startswith("wan"):
                     self.internet_interfaces.append(interface_name)
 
-                if "mgmt" in lowered_name or "management" in lowered_name:
+                if ("mgmt" in lowered_name or "management" in lowered_name):
                     self.management_interfaces.append(interface_name)
 
-            # Security Zones
+            # FortiGate Security Zones
+            if line == "config system zone":
+                inside_forti_zones = True
 
-            # Leave the current zone block
-            if line.startswith("object-group ") and "security-zone" not in line:
-                current_zone = None
+            elif inside_forti_zones and line == "end":
+                inside_forti_zones = False
+                current_forti_zone = None
 
-            # Zone Definition
-            zone_match = re.match(r"object-group interface (.+?) security-zone",line)
+            # FortiGate Zone Definition
+            match = re.match(r'edit\s+"(.+)"', line)
 
-            if zone_match:
-                current_zone = zone_match.group(1)
-                self.zones.add(current_zone)
+            if inside_forti_zones and match:
 
-                if current_zone not in self.zone_members:
-                    self.zone_members[current_zone] = []
+                current_forti_zone = match.group(1)
+                self.zones.add(current_forti_zone)
 
-            # Zone Members
-            member_match = re.match(r"interface-object interface-name (.+)",line)
+                if current_forti_zone not in self.zone_members:
+                    self.zone_members[current_forti_zone] = []
 
-            if member_match and current_zone:
-                self.zone_members[current_zone].append(member_match.group(1))
+            # FortiGate Zone Members
+            match = re.match(r'set interface (.+)', line)
+
+            if current_forti_zone and match:
+
+                interfaces = re.findall(r'"([^"]+)"', match.group(1))
+
+                self.zone_members[current_forti_zone].extend(
+                    interfaces
+                )
 
             # Trust Boundaries
             # TODO: Implement trust boundary detection logic here
-
-            # Publicly Exposed Networks
-            match = re.match(r"tunnel source interface (.+)",line)
-
-            if match:
-                source_interface = match.group(1)
-
-                if "internet" in source_interface.lower():
-                    self.internet_vpn_termination.append(source_interface)
-
-            # Management Access
-            if line.startswith("ssh "):
-                parts = line.split()
-
-                if len(parts) >= 4:
-
-                    network = ipaddress.IPv4Network(f"{parts[1]}/{parts[2]}", strict=False)
-                    self.management_access.append({
-                        "network": str(network),
-                        "interface": parts[3]
-                        })
-
-            # VPN Zones
-            self.vpn_zones_count = sum(1 for zone in self.zones if ("vti" in zone.lower() or "vpn" in zone.lower()))
 
             # -----------------------------
             # Access Control
             # -----------------------------
 
-            # Objects
+            # Cisco ASA / FTD Network Objects
             match = re.match(r"object network (.+)", line)
-            
+
             if match:
-                self.object_count +=1
+                self.object_count += 1
                 self.objects.append(match.group(1))
 
-            # Object Groups
+            # Cisco ASA / FTD Object Groups
             match = re.match(r"object-group (.+)", line)
 
-            if (match and "security-zone" not in line):
+            if (
+                match
+                and "security-zone" not in line
+            ):
                 self.object_group_count += 1
                 self.object_groups.append(match.group(1))
 
-            # Access Control Lists (ACLs)
+            # Cisco ASA / FTD Access Control Lists (ACLs)
             if line.startswith("access-list "):
 
                 lowered = line.lower()
+
                 self.acls.append(line)
                 self.acl_count += 1
 
@@ -383,22 +450,131 @@ class FirewallAudit:
                 if " deny " in lowered:
                     self.deny_rules_count += 1
 
-            if line.startswith("access-group") and " interface " in line:
+            # Cisco ASA / FTD ACL Bindings
+            if (
+                line.startswith("access-group")
+                and " interface " in line
+            ):
+
                 parts = line.split()
+
                 acl_name = parts[1]
                 self.interface_acls.add(acl_name)
+
+            # FortiGate Address Objects
+            if line == "config firewall address":
+                inside_forti_addresses = True
+
+            elif inside_forti_addresses and line == "end":
+                inside_forti_addresses = False
+
+            match = re.match(r'edit\s+"(.+)"', line)
+
+            if inside_forti_addresses and match:
+
+                object_name = match.group(1)
+
+                self.object_count += 1
+                self.objects.append(object_name)
+
+            # FortiGate Address Groups
+            if line == "config firewall addrgrp":
+                inside_forti_addrgrp = True
+
+            elif inside_forti_addrgrp and line == "end":
+                inside_forti_addrgrp = False
+
+            match = re.match(r'edit\s+"(.+)"', line)
+
+            if inside_forti_addrgrp and match:
+
+                group_name = match.group(1)
+
+                self.object_group_count += 1
+                self.object_groups.append(group_name)
+
+            # FortiGate Firewall Policies
+            if line == "config firewall policy":
+                inside_forti_policy = True
+
+            elif inside_forti_policy and line == "end":
+                inside_forti_policy = False
+
+            if inside_forti_policy and line.startswith("edit "):
+                current_forti_policy_disabled = False
+                current_forti_policy_action = None
+
+                current_forti_policy_id = line.split()[1]
+                current_forti_policy_srcaddr = None
+                current_forti_policy_dstaddr = None
+                current_forti_policy_service = None
+
+            # FortiGate any-any rules
+            match = re.match(r'set srcaddr "(.+)"', line)
+
+            if inside_forti_policy and match:
+                current_forti_policy_srcaddr = match.group(1)
+
+            match = re.match(r'set dstaddr "(.+)"', line)
+            if inside_forti_policy and match:
+                current_forti_policy_dstaddr = match.group(1)
+
+            match = re.match(r'set service "(.+)"', line)
+            if inside_forti_policy and match:
+                current_forti_policy_service = match.group(1)
+
+            if inside_forti_policy and "set action accept" in lowered:
+                current_forti_policy_action = "accept"
+
+            if inside_forti_policy and "set action deny" in lowered:
+                current_forti_policy_action = "deny"
+
+            if inside_forti_policy and "set status disable" in lowered:
+                current_forti_policy_disabled = True
+
+            if inside_forti_policy and line == "next":
+
+                self.forti_policies.append({
+                    "id": current_forti_policy_id,
+                    "disabled": current_forti_policy_disabled,
+                    "action": current_forti_policy_action,
+                    "srcaddr": current_forti_policy_srcaddr,
+                    "dstaddr": current_forti_policy_dstaddr,
+                    "service": current_forti_policy_service
+                })
+
+                if current_forti_policy_disabled:
+                    self.disabled_policy_count += 1
+
+                else:
+                    self.acl_count += 1
+
+                    if current_forti_policy_action == "accept":
+                        self.permit_rules_count += 1
+
+                    elif current_forti_policy_action == "deny":
+                        self.deny_rules_count += 1
+
+                # Reset policies
+                current_forti_policy_disabled = False
+                current_forti_policy_action = None
+
+                current_forti_policy_id = None
+                current_forti_policy_srcaddr = None
+                current_forti_policy_dstaddr = None
+                current_forti_policy_service = None
 
             # -----------------------------
             # VPN Security
             # -----------------------------
 
-            # VPN Pools (Remote Access VPNs)
-            match = re.match(r"ip local pool\s+(\S+)",line)
+            # Cisco ASA / FTD Remote Access VPN Pools
+            match = re.match(r"ip local pool\s+(\S+)", line)
 
             if match:
                 self.vpn_pools.append(match.group(1))
 
-            # WebVPN
+            # Cisco ASA / FTD WebVPN
             if line.startswith("webvpn"):
                 self.webvpn = True
 
@@ -411,14 +587,74 @@ class FirewallAudit:
             if line.startswith("ssl cipher tlsv1.2"):
                 self.webvpn_tls = True
 
-            # Tunnel Descriptions (Site-to-Site VPNs)
-            if (line.startswith("description ") and "VTI" in line.upper()):
-                desc = (line.replace("description","").strip())
+            # Cisco ASA / FTD Site-to-Site VPNs
+            if (
+                line.startswith("description ")
+                and "VTI" in line.upper()
+            ):
+                desc = line.replace("description", "").strip()
                 self.tunnel_descriptions.append(desc)
-            
-            # Disabled Tunnels
-            if (line == "shutdown" and current_is_tunnel and current_interface):
+
+            # Cisco ASA / FTD Disabled VPNs
+            if (
+                line == "shutdown"
+                and current_is_tunnel
+                and current_interface
+            ):
                 self.disabled_tunnels.append(current_interface)
+
+            # FortiGate SSL VPN
+            if line == "config vpn ssl settings":
+                self.webvpn = True
+
+            # FortiGate IPsec VPNs
+            if line == "config vpn ipsec phase1-interface":
+                inside_forti_phase1 = True
+
+            elif inside_forti_phase1 and line == "end":
+                inside_forti_phase1 = False
+
+            # FortiGate VPN Definition
+            match = re.match(r'edit\s+"(.+)"', line)
+
+            if inside_forti_phase1 and match:
+
+                current_forti_vpn = match.group(1)
+                current_forti_vpn_disabled = False
+
+            # FortiGate Disabled VPNs
+            if inside_forti_phase1 and "set status disable" in lowered:
+                current_forti_vpn_disabled = True
+
+            # Finalise VPN
+            if inside_forti_phase1 and line == "next":
+
+                self.forti_vpns.append({
+                    "name": current_forti_vpn,
+                    "disabled": current_forti_vpn_disabled
+                })
+
+                if current_forti_vpn_disabled:
+                    self.disabled_tunnels.append(current_forti_vpn)
+
+                else:
+                    self.tunnel_descriptions.append(current_forti_vpn)
+
+                current_forti_vpn = None
+                current_forti_vpn_disabled = False
+            
+            # FortiGate SSL VPN
+            if line == "config vpn ssl settings":
+                inside_forti_ssl_vpn = True
+                self.webvpn = True
+
+            elif inside_forti_ssl_vpn and line == "end":
+                inside_forti_ssl_vpn = False
+
+            match = re.match(r"set port (\d+)", line)
+
+            if inside_forti_ssl_vpn and match:
+                self.ssl_vpn_port = match.group(1)
 
             # -----------------------------
             # Administrator Authentication
@@ -426,7 +662,7 @@ class FirewallAudit:
 
             lowered = line.lower()
 
-            # Authentication Methods
+            # Cisco ASA / FTD Authentication Methods
             if line.startswith("aaa-server ") and "protocol tacacs+" in lowered:
                 self.tacacs = True
 
@@ -436,7 +672,7 @@ class FirewallAudit:
             if line.startswith("saml "):
                 self.saml = True
 
-            # SAML Identity Providers
+            # Cisco ASA / FTD SAML Identity Providers
             if "login.microsoftonline.com" in lowered:
                 self.identity_providers.add("Microsoft Entra ID")
 
@@ -446,7 +682,7 @@ class FirewallAudit:
             if "pingidentity" in lowered:
                 self.identity_providers.add("Ping Identity")
             
-            # AAA Servers In Use
+            # Cisco ASA / FTD AAA Servers In Use
             match = re.match(r"aaa-server\s+(\S+)\s+\((.+?)\)\s+host\s+(\S+)", line, re.IGNORECASE)
 
             if match:
@@ -454,7 +690,7 @@ class FirewallAudit:
                 host = match.group(3)
                 self.aaa_hosts[server_group] = host
 
-            # AAA Related Objects
+            # Cisco ASA / FTD AAA Related Objects
             if line.startswith("object network"):
 
                 name = line.split()[-1]
@@ -470,21 +706,75 @@ class FirewallAudit:
 
                     self.aaa_related_objects.add(name)
 
+            # FortiGate RADIUS
+            if line == "config user radius":
+                inside_forti_radius = True
+
+            elif inside_forti_radius and line == "end":
+                inside_forti_radius = False
+
+            match = re.match(r'edit\s+"(.+)"', line)
+
+            if inside_forti_radius and match:
+
+                current_forti_radius = match.group(1)
+
+                self.radius = True
+
+            match = re.match(r'set server "(.+)"', line)
+
+            if inside_forti_radius and match:
+
+                self.aaa_hosts["RADIUS"] = match.group(1)
+
+            # FortiGate LDAP
+            if line == "config user ldap":
+                inside_forti_ldap = True
+
+            elif inside_forti_ldap and line == "end":
+                inside_forti_ldap = False
+
+            match = re.match(r'edit\s+"(.+)"', line)
+
+            if inside_forti_ldap and match:
+
+                current_forti_ldap = match.group(1)
+
+                self.aaa_related_objects.add(
+                    current_forti_ldap
+                )
+
             # -----------------------------
             # Control Plane Security
             # -----------------------------
 
+            # Cisco
             if "control-plane" in lowered and "access-group" in lowered:
                 self.control_plane_acl = line.strip()
+
+            # Fortinet
+            match = re.match(r"set allowaccess (.+)", line)
+
+            if (
+                inside_forti_interfaces
+                and current_forti_interface_name
+                and match
+            ):
+                self.control_plane_interfaces.append({
+                    "interface": current_forti_interface_name,
+                    "services": match.group(1)
+                })
 
             # -----------------------------
             # Logging
             # -----------------------------
 
+            # Cisco Logging
             if line.startswith("logging enable"):
                 self.logging_enabled = True
 
             if line.startswith("logging host "):
+                self.syslog = True
                 parts = line.split()
 
                 if len(parts) >= 4:
@@ -492,14 +782,31 @@ class FirewallAudit:
                     host = parts[3]
                     self.logging_destinations.add(f"{interface} : {host}")
 
+            # FortiGate Logging
+            if line == "config log syslogd setting":
+                inside_forti_syslog = True
+
+            elif inside_forti_syslog and line == "end":
+                inside_forti_syslog = False
+
+            if inside_forti_syslog and "set status enable" in lowered:
+                self.logging_enabled = True
+                self.syslog = True
+
+            match = re.match(r'set server "(.+)"', line)
+
+            if inside_forti_syslog and match:
+                self.logging_destinations.add(match.group(1))
+
             # -----------------------------
             # Monitoring
             # -----------------------------
 
+            # Cisco Monitoring
             if line.startswith("snmp-server"):
                 self.snmp = True
 
-            # Monitoring Infrastructure #
+            # Cisco Monitoring Infrastructure
             upper = line.upper()
 
             if line.startswith("object network"):
@@ -526,10 +833,30 @@ class FirewallAudit:
                     or "NOC" in upper_name):
                     self.monitoring_platforms.add(name)
 
+            # FortiGate Monitoring
+            if line == "config system snmp community":
+                inside_forti_snmp = True
+                self.snmp = True
+
+            elif inside_forti_snmp and line == "end":
+                inside_forti_snmp = False
+
+            if inside_forti_snmp and line == "config hosts":
+                inside_forti_snmp_hosts = True
+
+            elif inside_forti_snmp_hosts and line == "end":
+                inside_forti_snmp_hosts = False
+
+            match = re.match(r"set ip (\S+) \S+", line)
+
+            if (inside_forti_snmp_hosts and match):
+                self.monitoring_platforms.add(match.group(1))
+
             # ----------------------------------
             # Network Address Translation (NAT)
             # ----------------------------------
 
+            # Cisco NAT
             if (line.startswith("nat ") or " nat " in f" {line} "):
                 self.nat = True
                 lowered = line.lower()
@@ -540,11 +867,31 @@ class FirewallAudit:
                 if " static " in lowered:
                     self.static_nat += 1
 
+            # FortiGate NAT (Virtual IPs)
+            if line == "config firewall vip":
+                inside_forti_vip = True
+
+            elif inside_forti_vip and line == "end":
+                inside_forti_vip = False
+
+            if inside_forti_vip and line.startswith("edit "):
+                self.nat = True
+                self.static_nat += 1
+
         # -----------------------------
         # Post-Processing
         # -----------------------------
 
-        # Build Any-Any Findings (Interface ACLs Only)
+        # Cisco ASA / FTD VPN Zones
+        self.vpn_zones_count = sum(
+            1 for zone in self.zones
+            if (
+                "vti" in zone.lower()
+                or "vpn" in zone.lower()
+            )
+        )
+
+        # Cisco ASA / FTD Any-Any Findings
         for acl in self.acls:
 
             parts = acl.split()
@@ -560,6 +907,20 @@ class FirewallAudit:
                 )
             ):
                 self.any_any_rules.append(acl)
+
+        # FortiGate Any-Any Findings
+        for policy in self.forti_policies:
+
+            if policy["disabled"]:
+                continue
+
+            if (
+                policy["action"] == "accept"
+                and policy["srcaddr"] == "all"
+                and policy["dstaddr"] == "all"
+                and policy["service"] == "ALL"
+            ):
+                self.any_any_rules.append(f'Policy {policy["id"]}')
 
     # Section formatting
     def section(self, title):
@@ -650,6 +1011,7 @@ class FirewallAudit:
         print(f"ACL Entries       : {self.acl_count}")
         print(f"Permit Rules      : {self.permit_rules_count}")
         print(f"Deny Rules        : {self.deny_rules_count}")
+        print(f"Disabled Policies : {self.disabled_policy_count}")
         print(f"Network Objects   : {self.object_count}")
         print(f"Object Groups     : {self.object_group_count}")
 
@@ -700,14 +1062,20 @@ class FirewallAudit:
             for pool in self.vpn_pools:
                 print(f"  - {pool}")
 
-        # WebVPN
+        # WebVPN / SSL VPN
         if self.webvpn:
 
             self.subsection("WEBVPN")
 
-            print(f"HSTS               : {'Yes' if self.webvpn_hsts else 'No'}")
-            print(f"Content Security   : {'Yes' if self.webvpn_csp else 'No'}")
-            print(f"TLS 1.2 Configured : {'Yes' if self.webvpn_tls else 'No'}")
+            if self.vendor == "Cisco":
+
+                print(f"HSTS               : {'Yes' if self.webvpn_hsts else 'No'}")
+                print(f"Content Security   : {'Yes' if self.webvpn_csp else 'No'}")
+                print(f"TLS 1.2 Configured : {'Yes' if self.webvpn_tls else 'No'}")
+
+            elif self.vendor == "Fortinet":
+
+                print(f"SSL VPN Port       : {self.ssl_vpn_port}")
 
         # Site-to-Site VPNs
         if self.tunnel_descriptions:
@@ -737,8 +1105,8 @@ class FirewallAudit:
         self.subsection("AUTHENTICATION METHODS")
 
         print(f"TACACS+ : {'Yes' if self.tacacs else 'No'}")
-        print(f"RADIUS : {'Yes' if self.radius else 'No'}")
-        print(f"SAML   : {'Yes' if self.saml else 'No'}")
+        print(f"RADIUS  : {'Yes' if self.radius else 'No'}")
+        print(f"SAML    : {'Yes' if self.saml else 'No'}")
             
         self.subsection("AAA SERVERS IN USE")
 
@@ -775,13 +1143,25 @@ class FirewallAudit:
 
         self.section("CONTROL PLANE PROTECTION")
 
+        # Cisco
         if self.control_plane_acl:
+
             parts = self.control_plane_acl.split()
+
             acl_name = parts[1]
             interface = parts[4]
 
-            print(f"Control Plane ACL : {acl_name}")
+            print(f"Control Plane ACL  : {acl_name}")
             print(f"Protected Interface: {interface}")
+
+        # FortiGate
+        elif self.control_plane_interfaces:
+
+            self.subsection("MANAGEMENT SERVICES")
+
+            for entry in self.control_plane_interfaces:
+
+                print(f"  - {entry['interface']} ({entry['services']})")
 
         else:
             print("Control Plane ACL : None")
@@ -798,6 +1178,7 @@ class FirewallAudit:
         self.section("LOGGING")
 
         print(f"Logging Enabled : {'Yes' if self.logging_enabled else 'No'}")
+        print(f"Syslog          : {'Yes' if self.syslog else 'No'}")
 
         if self.logging_destinations:
 
