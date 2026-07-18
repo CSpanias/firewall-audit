@@ -5,6 +5,7 @@ A Python-based tool designed to make firewall configuration reviews more efficie
 Currently supports:
 * Cisco Firepower Threat Defense (FTD)
 * Cisco Adaptive Security Appliance (ASA)
+* Fortinet FortiGate
 
 Developed as an educational tool to accompany [Firewall Security Explained](https://mollysec.com/posts/firewall-security-explained/).
 
@@ -56,9 +57,10 @@ The tool follows the same methodology typically used during a firewall security 
 
 ### 1. Device discovery
 
+* Vendor identification
 * Hostname extraction
 * Software version identification
-* Cisco Firepower model detection
+* Device model detection (where available)
 
 ### 2. Network architecture analysis
 
@@ -72,24 +74,26 @@ The tool follows the same methodology typically used during a firewall security 
 
 * Firewall object inventory
 * Object-group inventory
-* ACL enumeration
+* ACL / policy enumeration
 * Permit and deny rule statistics
 * Identification of potentially risky rules
 * Detection of broad `any any` access
 
 ### 4. VPN analysis
 
-* Remote-access VPN pool discovery
-* Site-to-site tunnel identification
-* Disabled tunnel detection
+* SSL VPN / WebVPN detection
+* Remote-access VPN discovery
+* Site-to-site VPN identification
+* Disabled VPN detection
 
 ### 5. Administration and authentication
 
 * TACACS detection
 * RADIUS detection
 * SAML detection
-* Cisco ISE identification
 * AAA infrastructure discovery
+* Authentication source identification
+* AAA-related object discovery
 
 ### 6. Monitoring and logging
 
@@ -98,18 +102,20 @@ The tool follows the same methodology typically used during a firewall security 
 * Monitoring platform discovery
 * Logging destination identification
 
-### 7. Infrastructure services
+### 7. Control plane and network services
 
-* BGP routing detection
+* Control-plane protection analysis
+* Management service identification
 * NAT usage detection
-* Control-plane ACL identification
+* Static NAT / VIP discovery
 
-### 8. WebVPN security review
+### 8. Remote Access VPN Security
 
-* HSTS detection
-* Content Security Policy detection
-* TLS configuration review
-* Cipher suite extraction
+* WebVPN detection
+* SSL VPN detection
+* HSTS detection (Cisco)
+* Content Security Policy detection (Cisco)
+* TLS configuration review (Cisco)
 
 ## Usage
 
@@ -133,107 +139,177 @@ firewall-audit firepower-config.txt
 
 ```text
 ================================================================================
-1. DEVICE & MANAGEMENT PLANE
+DEVICE INFORMATION
 ================================================================================
+Vendor   : Cisco
+Hostname : FW-EDGE-01
+Version  : 7.6.2
+Model    : Cisco Firepower 1150 Threat Defense v7.6.2 (build 329)
 
-Hostname : FTD-EDGE-01
-Version  : 7.4.1
-Model    : Cisco Firepower Threat Defense
+Firmware versions affect security features, support status, and vulnerability
+exposure.
 ```
 
 ```text
 ================================================================================
-2. NETWORK ARCHITECTURE
+NETWORK ARCHITECTURE
 ================================================================================
+Named Segments       : 11
+Security Zones       : 5
+Internet Interfaces  : 1
+VPN Zones            : 1
+Management Interfaces: 1
 
-Interfaces Found : 18
+PUBLICLY EXPOSED NETWORKS
 
-Internet Facing Interfaces:
   - INTERNET
 
-Management Interfaces:
-  - MANAGEMENT
+MANAGEMENT INTERFACES
 
-Review Focus:
-  - Internet -> Corp access
-  - Internet -> Management access
-  - DMZ segregation
-  - Trust boundaries
+  - management
+
+MANAGEMENT ACCESS
+
+  - 10.99.99.0/24 (MGMT)
+  - 10.10.10.0/24 (MGMT)
+
+Understanding the architecture helps identify trust boundaries and assess how
+traffic flows between them.
 ```
 
 ```text
 ================================================================================
-3. ACCESS CONTROL
+ACCESS CONTROL
 ================================================================================
+ACL Entries       : 9
+Permit Rules      : 8
+Deny Rules        : 1
+Disabled Policies : 0
+Network Objects   : 14
+Object Groups     : 4
 
-Network Objects : 482
-Object Groups   : 156
-ACL Entries     : 2158
-Permit Rules    : 1934
-Deny Rules      : 224
+ANY-ANY RULES
+
+  None identified
+
+ACLs determine which systems can communicate and how traffic is permitted across
+trust boundaries.
 ```
 
 ```text
 ================================================================================
-5. POTENTIAL FINDINGS
+VPN SECURITY
 ================================================================================
+Remote Access VPN Pools : 2
+WebVPN Enabled          : Yes
+Site-to-Site VPNs       : 2
+Disabled VPNs           : 1
 
-Rules Requiring Review: 4
+REMOTE ACCESS VPNS (2)
 
-  access-list OUTSIDE-IN extended permit ip any any
-  access-list VPN-IN extended permit tcp any any eq 3389
+  - ANYCONNECT_POOL
+  - MGMT_VPN_POOL
+
+WEBVPN
+
+HSTS               : Yes
+Content Security   : Yes
+TLS 1.2 Configured : Yes
+
+SITE-TO-SITE VPNS (2)
+
+  - AZURE-VTI-PRIMARY
+  - AWS-VTI
+
+DISABLED VPNS (1)
+
+  - Tunnel3
+
+VPNs extend trust boundaries by providing remote users and external
+networks access to internal resources.
 ```
 
 ```text
 ================================================================================
-6. REMOTE CONNECTIVITY
+ADMINISTRATION & AUTHENTICATION
 ================================================================================
 
-VPN Pools:
-  - RA-VPN-POOL
+AUTHENTICATION METHODS
 
-Tunnel Interfaces:
-  - AWS Production VTI
-  - Azure DR VTI
+TACACS+ : Yes
+RADIUS  : Yes
+SAML    : Yes
 
-Disabled Tunnels:
-  - Tunnel102
-```
+AAA SERVERS IN USE
 
-```text
-================================================================================
-7. ADMINISTRATION & AUTHENTICATION
-================================================================================
+  - RADIUS  : 10.99.99.110
+  - TACACS  : 10.99.99.100
 
-TACACS : Yes
-RADIUS : No
-SAML   : Yes
+SAML IDENTITY PROVIDERS
 
-Cisco ISE Servers:
+  - Microsoft Entra ID
+
+AAA RELATED OBJECTS
+
   - ISE-PRIMARY
-  - ISE-SECONDARY
-```
+  - RADIUS-SERVER
+  - TACACS-SERVER
 
-```text
-================================================================================
-9. MONITORING
-================================================================================
-
-SNMP   : Yes
-Syslog : Yes
-
-Monitoring Platforms:
-  - SOLARWINDS
-  - NOC-MONITORING
+Centralised AAA reduces reliance on local accounts and improves authentication,
+authorisation, and auditing.
 ```
 
 ```text
 ================================================================================
 CONTROL PLANE PROTECTION
 ================================================================================
+Control Plane ACL  : CONTROL_PLANE_BLOCK
+Protected Interface: INTERNET
 
-Control Plane ACL:
-  control-plane access-group MGMT-ACL in interface MANAGEMENT
+Control Plane ACLs restrict traffic destined to the firewall itself rather than
+traffic traversing the firewall.
+```
+
+```text
+================================================================================
+LOGGING
+================================================================================
+Logging Enabled : Yes
+Syslog          : Yes
+
+SYSLOG SERVERS
+
+  - MGMT : 10.99.99.210
+
+Logging provides visibility into security events, administrative actions,
+and policy violations.
+```
+
+```text
+================================================================================
+MONITORING
+================================================================================
+SNMP   : Yes
+
+MONITORING PLATFORMS
+
+  - SOLARWINDS
+
+Monitoring provides visibility into firewall health, performance, and
+availability.
+```
+
+```text
+================================================================================
+NAT
+================================================================================
+NAT Enabled : Yes
+
+Dynamic NAT Rules : 1
+Static NAT Rules  : 1
+
+NAT determines how traffic is translated between networks but does not control
+whether the traffic is permitted.
 ```
 
 ## Requirements
@@ -241,10 +317,6 @@ Control Plane ACL:
 ### Core
 
 * Python 3
-
-### Optional
-
-* 
 
 ## Limitations
 
@@ -255,13 +327,7 @@ Control Plane ACL:
 
 ## Roadmap
 
-* Firewall rule risk scoring
-* Detection of unused objects and object groups
-* Shadowed and duplicate rule analysis
 * Exportable assessment reports (`.xml`, `.json`, `.html`)
-* Multi-firewall comparison mode
 * Palo Alto support
-* Cisco ASA support
-* Fortinet support
-* Management-plane security assessment
-* Interface exposure mapping
+* Firewall rule risk scoring
+* Verbose review modes (`--net-arch`, `--acls`, etc.)
