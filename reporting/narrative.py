@@ -20,12 +20,42 @@ def _text(value: object) -> str:
     return re.sub(r"([\\`*_{}\[\]<>|])", r"\\\1", str(value)).replace("\n", " ")
 
 
-def _table(headers: list[str], rows: list[list[object]]) -> str:
+def _code(value: object, *, in_table: bool = False) -> str:
+    if isinstance(value, list):
+        return ", ".join(_code(item, in_table=in_table) for item in value) or "None"
+    if value is None or value == "":
+        return "Not specified"
+    if not isinstance(value, str):
+        return _text(value)
+    text = value.replace("\n", " ").replace("\r", " ")
+    if in_table:
+        text = text.replace("|", r"\|")
+    runs = re.findall(r"`+", text)
+    fence = "`" * (max((len(run) for run in runs), default=0) + 1)
+    if text.startswith(("`", " ")) or text.endswith(("`", " ")):
+        text = f" {text} "
+    return f"{fence}{text}{fence}"
+
+
+def _table(
+    headers: list[str],
+    rows: list[list[object]],
+    *,
+    code_columns: set[int] | None = None,
+    code_cells: set[tuple[int, int]] | None = None,
+) -> str:
     lines = [
         "| " + " | ".join(headers) + " |",
         "| " + " | ".join("---" for _ in headers) + " |",
     ]
-    lines.extend("| " + " | ".join(_text(value) for value in row) + " |" for row in rows)
+    for row_index, row in enumerate(rows):
+        cells = [
+            _code(value, in_table=True)
+            if column in (code_columns or set()) or (row_index, column) in (code_cells or set())
+            else _text(value)
+            for column, value in enumerate(row)
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
 
@@ -38,6 +68,7 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                 [labels.get(key, key.replace("_", " ").title()), value]
                 for key, value in evidence["ntp"].items()
             ],
+            code_columns={1},
         )
     for key in ("rules", "interfaces"):
         entries = evidence.get(key)
@@ -64,13 +95,14 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                 return _table(
                     [label for _, label in columns],
                     [[item.get(name) for name, _ in columns] for item in entries],
+                    code_columns=set(range(len(columns))),
                 )
     rows = [[key.replace("_", " ").title(), value] for key, value in evidence.items()]
-    return _table(["Evidence", "Observed configuration"], rows) if rows else ""
+    return _table(["Evidence", "Observed configuration"], rows, code_columns={1}) if rows else ""
 
 
 def _prose_list(values: list[str]) -> str:
-    items = [_text(value) for value in values]
+    items = [_code(value) for value in values]
     return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else items[0]
 
 
@@ -259,7 +291,7 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     inventory = report.get("inventory", {})
     findings = report.get("findings", [])
     vendor = str(device.get("vendor") or "Unknown vendor")
-    hostname = _text(device.get("hostname") or "the supplied firewall")
+    hostname = _code(device["hostname"]) if device.get("hostname") else "the supplied firewall"
     if not report.get("checks_run", True):
         introduction = (
             f"A configuration inventory was generated for {hostname} ({_text(vendor)}). "
@@ -299,6 +331,7 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
                 ["Policies", inventory.get("rules", 0)],
                 ["Enabled policies", inventory.get("enabled_rules", 0)],
             ],
+            code_cells={(1, 1), (2, 1), (3, 1)},
         ),
     ]
     if report.get("parse_warnings"):
@@ -329,35 +362,33 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
         impact = definition.commentary_impact if definition else finding.get("impact")
         if impact:
             sections.append(_text(impact))
-        if finding.get("recommendation"):
-            sections.append(_text(finding["recommendation"]))
         affected = list(
             dict.fromkeys(item for entry in group for item in entry.get("affected_objects", []))
         )
-        if affected and key not in {
-            "local-admin-auth",
-            "ntp-server-review",
-            "logging-coverage-gap",
-        }:
-            if all(item.startswith("Policy ") for item in affected):
-                sections.append("Affected policies: " + _text([item[7:] for item in affected]))
-            elif all(item.startswith("Rule ") for item in affected):
-                sections.append("Affected rules: " + _text([item[5:] for item in affected]))
-            elif all(item.startswith("Interface ") for item in affected):
-                sections.append("Affected interfaces: " + _text([item[10:] for item in affected]))
-            else:
-                sections.append("Affected: " + _text(affected))
         if key == "broad-allow-rule":
             entries = []
             for entry in group:
                 details = entry.get("evidence") or {}
-                entries.append({"id": details.get("rule_id"), **details})
+                identifier = details.get("rule_id")
+                objects = entry.get("affected_objects") or []
+                if not identifier and len(objects) == 1:
+                    identifier = re.sub(r"^(Policy|Rule) ", "", objects[0])
+                entries.append({"id": identifier, **details})
             evidence_tables = [_evidence_table({"rules": entries})]
         else:
             evidence_tables = [_evidence_table(entry.get("evidence") or {}) for entry in group]
         evidence_tables = [table for table in evidence_tables if table]
+        if not evidence_tables and affected:
+            evidence_tables = [
+                _table(["Affected objects"], [[item] for item in affected], code_columns={0})
+            ]
         if evidence_tables:
-            sections.append("Supporting evidence:\n\n" + "\n\n".join(evidence_tables))
+            introduction = (
+                "The table below provides further details of the observed configuration."
+                if len(evidence_tables) == 1
+                else "The tables below provide further details of the observed configuration."
+            )
+            sections.append(introduction + "\n\n" + "\n\n".join(evidence_tables))
         commentary.append("\n\n".join(sections))
 
     recommendations = []

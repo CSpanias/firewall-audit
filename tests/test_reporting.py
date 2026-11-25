@@ -227,7 +227,7 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("Remediation Guidance", html)
         self.assertIn("Copy All Markdown", html)
         self.assertEqual(html.count(">Copy Markdown</button>"), 3)
-        self.assertIn("Supporting evidence", html)
+        self.assertIn("The table below provides further details", html)
         self.assertNotIn("<strong>", html)
         self.assertNotIn("validated before reporting", html)
         self.assertIn(
@@ -279,7 +279,8 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertEqual(markdown["remediation_guidance"], report["remediation_guidance"])
         self.assertNotIn("**", markdown["all"])
         self.assertIn("| Rule |", markdown["technical_commentary"])
-        self.assertIn("Affected policies: 2", markdown["technical_commentary"])
+        self.assertIn("| `2` |", markdown["technical_commentary"])
+        self.assertNotIn("Affected policies:", markdown["technical_commentary"])
         self.assertIn("## Executive Summary", markdown["all"])
         self.assertIn("## Remediation Guidance", markdown["all"])
 
@@ -562,14 +563,23 @@ class TechnicalCommentaryTests(unittest.TestCase):
             ],
         }
 
-        commentary = build_narratives(report)["technical_commentary"]
+        narratives = build_narratives(report)
+        commentary = narratives["technical_commentary"]
 
         self.assertIn("firewall policies, administrative access controls", commentary)
         self.assertEqual(commentary.count("### Policies with Unrestricted"), 1)
         self.assertIn("Two enabled policies permitted traffic", commentary)
-        self.assertIn("Affected policies: 1, 2", commentary)
-        self.assertIn("| 1 |", commentary)
-        self.assertIn("| 2 |", commentary)
+        self.assertIn("`edge-fw`", commentary)
+        self.assertNotIn("Affected policies:", commentary)
+        self.assertIn("| `1` |", commentary)
+        self.assertIn("| `2` |", commentary)
+        self.assertIn("`ALL`", commentary)
+        self.assertNotIn("Restrict the affected policies.", commentary)
+        self.assertIn("Restrict the affected policies.", narratives["remediation_guidance"])
+        self.assertIn(
+            "The table below provides further details of the observed configuration.",
+            commentary,
+        )
         self.assertNotIn("Impact:", commentary)
         self.assertNotIn("**", commentary)
 
@@ -617,9 +627,56 @@ class TechnicalCommentaryTests(unittest.TestCase):
         }
         commentary = build_narratives(report)["technical_commentary"]
         self.assertIn("One enabled rule referenced", commentary)
-        self.assertIn("including ALL", commentary)
+        self.assertIn("including `ALL`", commentary)
         self.assertIn("does not by itself establish which protocols", commentary)
-        self.assertIn("Affected rules: EDGE / line 1", commentary)
+        self.assertIn("`EDGE / line 1`", commentary)
+        self.assertNotIn("Affected rules:", commentary)
+
+    def test_code_spans_handle_untrusted_identifiers_and_table_delimiters(self) -> None:
+        hostname = "edge|`<script>alert(1)</script>"
+        rule = "ACL|`1"
+        service = "WEB|`<&>"
+        report = {
+            "device": {"hostname": hostname, "vendor": "Cisco"},
+            "findings": [
+                {
+                    "id": "legacy-service-policy",
+                    "affected_objects": [f"Rule {rule}"],
+                    "evidence": {"rules": [{"id": rule, "services": [service]}]},
+                }
+            ],
+        }
+        commentary = build_narratives(report)["technical_commentary"]
+        html = render_html(report)
+
+        self.assertIn("``ACL\\|`1``", commentary)
+        self.assertIn("``WEB\\|`<&>``", commentary)
+        self.assertNotIn("<script>alert(1)</script>", html)
+
+        class CodeParser(HTMLParser):
+            in_code = False
+            values: list[str]
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.values = []
+
+            def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                self.in_code = tag == "code"
+
+            def handle_data(self, data: str) -> None:
+                if self.in_code:
+                    self.values.append(data)
+
+            def handle_endtag(self, tag: str) -> None:
+                if tag == "code":
+                    self.in_code = False
+
+        parser = CodeParser()
+        parser.feed(html)
+        self.assertIn(hostname, parser.values)
+        self.assertIn(rule, parser.values)
+        self.assertIn(service, parser.values)
 
     def test_unknown_finding_preserves_its_description_and_impact(self) -> None:
         report = {
@@ -629,12 +686,14 @@ class TechnicalCommentaryTests(unittest.TestCase):
                     "title": "Additional observation",
                     "description": "A configuration issue was identified.",
                     "impact": "It may affect access.",
+                    "affected_objects": ["Policy custom-rule"],
                 }
             ]
         }
         commentary = build_narratives(report)["technical_commentary"]
         self.assertIn("A configuration issue was identified.", commentary)
         self.assertIn("It may affect access.", commentary)
+        self.assertIn("| `Policy custom-rule` |", commentary)
 
 
 if __name__ == "__main__":

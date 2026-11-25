@@ -1,7 +1,7 @@
 """Self-contained HTML assessment report with Markdown copy controls."""
 
 import json
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -28,6 +28,13 @@ class _SafeLinks(Treeprocessor):
                 element.tag = "span"
                 element.text = element.get("alt", "")
                 element.attrib.clear()
+            elif element.tag == "code" and element.text:
+                element.text = unescape(element.text)
+        for cell in root.iter():
+            if cell.tag in {"td", "th"}:
+                for code in cell.iter("code"):
+                    if code.text:
+                        code.text = code.text.replace(r"\|", "|")
 
 
 class _SafeLinksExtension(Extension):
