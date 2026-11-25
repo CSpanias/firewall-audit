@@ -73,12 +73,13 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                     ("source_interfaces", "Source interfaces"),
                     ("destination_interfaces", "Destination interfaces"),
                     ("source_addresses", "Source"),
+                    ("source_negated", "Source negated"),
                     ("source_address_scopes", "Resolved source scopes"),
                     ("unresolved_source_references", "Unresolved source references"),
-                    ("source_negated", "Source negated"),
                     ("destination_addresses", "Destination"),
                     ("destination_negated", "Destination negated"),
                     ("services", "Services"),
+                    ("vip_port_mapping", "VIP port mapping"),
                     ("schedule", "Schedule"),
                     ("indicators", "Review indicators"),
                 )
@@ -256,10 +257,11 @@ def _commentary_observation(finding_id: str, findings: list[dict[str, Any]], ven
         return f"{subject} permitted traffic with unrestricted source and destination addresses."
     if finding_id == "admin-service-vip-policy" and count:
         return (
-            f"{subject} permitted traffic to systems behind public or WAN-facing virtual IPs "
-            "using service definitions"
+            f"{subject} referenced public or WAN-facing virtual IPs and "
+            "service definitions"
             + (f" including {_prose_list(services)}." if services else ".")
-            + " These definitions include or may permit services commonly used for administration."
+            + " The configurations may permit SSH, Telnet or RDP access. "
+            "Source restrictions, the mapped service and reachability require verification."
         )
     if finding_id == "legacy-service-policy" and count:
         return f"{subject} referenced legacy or broadly defined service definitions" + (
@@ -278,7 +280,10 @@ def _commentary_observation(finding_id: str, findings: list[dict[str, Any]], ven
             "in the supplied configuration."
         )
     if finding_id == "logging-coverage-gap":
-        return "No enabled Syslog or FortiAnalyzer destination was identified in the configuration."
+        return (
+            "No explicitly enabled destination with a server was identified in the parsed "
+            "Syslog or FortiAnalyzer settings. Other collection methods were not assessed."
+        )
     if finding_id == "local-admin-auth":
         count = evidence[0].get("administrator_accounts")
         if isinstance(count, int) and count > 0:
@@ -288,19 +293,29 @@ def _commentary_observation(finding_id: str, findings: list[dict[str, Any]], ven
             )
         else:
             accounts = "Administrator accounts were identified"
+        if evidence[0].get("central_authentication_servers") == 0:
+            observation = (
+                "no RADIUS, LDAP or TACACS+ server was identified in the parsed configuration"
+            )
+        else:
+            observation = (
+                "no administrator account was explicitly configured for remote authentication"
+            )
         return (
-            f"{accounts}; however, no Remote Authentication Dial-In User Service (RADIUS), "
-            "Lightweight Directory Access Protocol (LDAP) or Terminal Access Controller "
-            "Access-Control System Plus (TACACS+) server was found in the supplied configuration."
+            f"{accounts}; however, {observation}. "
+            "Other authentication mechanisms were not assessed."
         )
     if finding_id == "ntp-server-review":
-        state = (evidence[0].get("ntp") or {}).get("ntpsync", "").lower()
+        ntp = evidence[0].get("ntp") or {}
+        state = ntp.get("ntpsync", "").lower()
         if state == "enable":
             prefix = "Network Time Protocol (NTP) synchronisation was enabled"
         elif state == "disable":
             prefix = "Network Time Protocol (NTP) synchronisation was disabled"
         else:
             prefix = "The Network Time Protocol (NTP) synchronisation state was not confirmed"
+        if ntp.get("servers"):
+            return f"{prefix}, despite configured NTP server entries."
         return f"{prefix}; however, no explicit NTP server entries were identified."
     return "\n\n".join(_text(finding.get("description")) for finding in findings)
 
@@ -366,13 +381,14 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
             names = context.get("host_objects", {}).get(address, [])
             hosts.append(f"{_prose_list(names)} ({_code(address)})" if names else _code(address))
         host_list = ", ".join(hosts[:-1]) + " and " + hosts[-1] if len(hosts) > 1 else hosts[0]
-        note = f"**Note:** The following assessment hosts were supplied: {host_list}. "
+        host_noun = "host was" if len(hosts) == 1 else "hosts were"
+        note = f"**Note:** The {host_list} {host_noun} used for testing. "
         if not report.get("checks_run", True) or not context["addresses_available"]:
             note += "Dedicated rules could not be evaluated for exclusion."
         elif context["excluded_rules"]:
             note += (
-                "Rules dedicated to these hosts were excluded from automated findings; "
-                "shared and subnet rules remained in scope."
+                f"Dedicated rules for {'this host' if len(hosts) == 1 else 'these hosts'} "
+                "were excluded from automated findings; shared and subnet rules remained in scope."
             )
         else:
             note += (

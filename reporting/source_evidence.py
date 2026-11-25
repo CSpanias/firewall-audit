@@ -160,14 +160,20 @@ def _fortigate_evidence(
             for item in _edits(block):
                 add(block, item, {"remote-auth"})
     elif finding.id == "logging-coverage-gap":
-        for kind in ("syslogd", "fortianalyzer", "fortianalyzer2"):
+        for kind in (
+            "syslogd", "syslogd2", "syslogd3", "syslogd4", "fortianalyzer", "fortianalyzer2"
+        ):
             for block in _configs(roots, "log", kind, "setting"):
                 add(block, None, {"status", "server", "server2", "port", "mode"})
     elif finding.id == "ntp-server-review":
         for block in _configs(roots, "system", "ntp"):
             add(block, None, {"ntpsync", "type", "syncinterval"})
 
-    if finding.id in _ABSENCE_FINDINGS:
+    ntp_disabled = (
+        finding.id == "ntp-server-review"
+        and str(finding.data.get("ntp", {}).get("ntpsync", "")).lower() == "disable"
+    )
+    if finding.id in _ABSENCE_FINDINGS and not ntp_disabled:
         notes.append(
             "This is an absence-based observation: excerpts alone cannot prove absence. "
             "The finding reflects the parsed configuration."
@@ -245,8 +251,5 @@ def build_source_evidence(
             item.lines = item.lines[:_SAMPLE_LINE_LIMIT]
             omitted = len(full.lines) - len(item.lines)
             if omitted:
-                item.notes.append(
-                    f"Sample only: {omitted} selected source line(s) omitted. "
-                    "Use --evidence-full to show all selected lines."
-                )
+                item.notes.append(f"Sample only: {omitted} selected source line(s) omitted.")
     return selected

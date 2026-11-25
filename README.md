@@ -33,7 +33,8 @@ firewall-audit -C firewall.conf --output-dir reports
 firewall-audit -C firewall.conf --assessment-ip 192.0.2.10
 firewall-audit -C firewall.conf --evidence
 firewall-audit -C firewall.conf --evidence legacy-service-policy
-firewall-audit -C firewall.conf --evidence legacy-service-policy --evidence-full
+firewall-audit -C firewall.conf --evidence-full
+firewall-audit -C firewall.conf --evidence-full legacy-service-policy
 ```
 
 Each run generates a timestamped JSON report and a self-contained HTML report.
@@ -41,8 +42,9 @@ Repeat `--assessment-ip` for multiple testing hosts. Rules whose source or
 destination consists exclusively of those hosts are excluded from findings;
 shared and subnet rules remain in scope.
 Use `--evidence` to display compact samples of selected configuration lines, or
-supply a finding ID to display only that finding's evidence. Add
-`--evidence-full` to show all selected lines without sample truncation.
+supply a finding ID to display only that finding's evidence. Use
+`--evidence-full` instead to show all selected lines without sample truncation;
+it also accepts an optional finding ID.
 
 The HTML report works offline and provides an executive summary, technical
 commentary with supporting evidence, and remediation guidance. Each section
@@ -61,11 +63,11 @@ FortiOS checks identify:
 
 * Enabled allow policies with unrestricted source and destination.
 * Management services enabled on WAN-facing interfaces.
-* Administrative services permitted to WAN-facing VIPs.
+* Potential SSH, Telnet or RDP access through public or WAN-facing VIPs.
 * Enabled allow policies referencing clear-text or legacy services.
 * Potential temporary or testing-related access requiring owner review.
-* Missing remote logging and explicitly disabled policy logging.
-* Missing explicit NTP server entries.
+* Unverified remote logging and explicitly disabled policy logging.
+* Disabled NTP synchronisation or missing explicit NTP server entries.
 
 Cisco checks review bound ACL entries for unrestricted endpoints, potential
 temporary access, and clear-text, legacy, or unrestricted services. Standard

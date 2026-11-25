@@ -30,8 +30,8 @@ from reporting.sureformat import export_sureformat
 
 def run_audit_workflow(args: Namespace) -> None:
     """Execute the audit workflow and write structured and HTML reports."""
-    if args.evidence_full and args.evidence is None:
-        raise ValueError("--evidence-full requires --evidence.")
+    full_evidence = args.evidence_full is not None
+    evidence_selection = args.evidence_full if full_evidence else args.evidence
     config_path = Path(args.config).expanduser()
     output_dir = Path(args.output_dir).expanduser()
     valid, message = validate_configuration_file(str(config_path))
@@ -60,7 +60,7 @@ def run_audit_workflow(args: Namespace) -> None:
         progress.update(task, description=f"Parsing {vendor} configuration")
         evidence_source = (
             config_path.read_text(encoding="utf-8", errors="replace")
-            if args.evidence is not None and vendor != "watchguard"
+            if evidence_selection is not None and vendor != "watchguard"
             else None
         )
         config = parser.parse(str(config_path))
@@ -82,14 +82,16 @@ def run_audit_workflow(args: Namespace) -> None:
         else:
             raise ValueError(f"No analysis workflow is available for detected vendor: {vendor}.")
         selected_findings = findings
-        if args.evidence not in (None, "all"):
-            selected_findings = [finding for finding in findings if finding.id == args.evidence]
+        if evidence_selection not in (None, "all"):
+            selected_findings = [
+                finding for finding in findings if finding.id == evidence_selection
+            ]
             if not selected_findings:
-                raise ValueError(f"No finding with ID '{args.evidence}' was identified.")
+                raise ValueError(f"No finding with ID '{evidence_selection}' was identified.")
         report = build_report(config, findings, config_path.name, args.assessment_ip)
         evidence = (
             build_source_evidence(
-                evidence_source, config, selected_findings, sample=not args.evidence_full
+                evidence_source, config, selected_findings, sample=not full_evidence
             )
             if evidence_source is not None
             else []
@@ -133,7 +135,7 @@ def run_audit_workflow(args: Namespace) -> None:
         warn("Policy inventory complete; no automated security checks were run.")
     for path in report_paths:
         console.print(Text(f"Report written: {path}", style="green"))
-    if args.evidence is not None:
+    if evidence_selection is not None:
         if not evidence:
             console.print(Text("No source evidence is available: no findings were identified."))
         for item in evidence:
@@ -143,7 +145,7 @@ def run_audit_workflow(args: Namespace) -> None:
             truncated = False
             for number, line in item.lines:
                 text = Text(f"{number:>6} | {line}")
-                if not args.evidence_full and text.cell_len > min(console.width, 120):
+                if not full_evidence and text.cell_len > min(console.width, 120):
                     text.truncate(min(console.width, 120), overflow="ellipsis")
                     truncated = True
                 displayed.append(text)
@@ -158,6 +160,4 @@ def run_audit_workflow(args: Namespace) -> None:
             for note in item.notes:
                 console.print(Text(f"Note: {note}"))
             if truncated:
-                console.print(Text(
-                    "Note: Long lines were truncated; use --evidence-full for complete lines."
-                ))
+                console.print(Text("Note: Long lines were truncated."))

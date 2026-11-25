@@ -348,7 +348,9 @@ class FortigateParser:
 
     @staticmethod
     def _parse_logging(roots: list[_Node], config: FirewallConfig) -> None:
-        for kind in ("syslogd", "fortianalyzer", "fortianalyzer2"):
+        for kind in (
+            "syslogd", "syslogd2", "syslogd3", "syslogd4", "fortianalyzer", "fortianalyzer2"
+        ):
             for block in _configs(roots, "log", kind, "setting"):
                 fields = _text_fields(
                     block,

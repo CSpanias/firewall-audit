@@ -1,9 +1,10 @@
 """Configuration-only review checks for FortiGate data."""
 
 import ipaddress
+import re
 
 from analysis.assessment_context import exclude_assessment_rules, find_temporary_access
-from analysis.services import LEGACY_NAMES, LEGACY_PORTS, matching_rule_services
+from analysis.services import LEGACY_NAMES, LEGACY_PORTS, matching_rule_services, port_ranges_match
 from common.finding_definitions import load_finding_definitions
 from common.text import number_as_words
 from models.finding import Finding, FindingDefinition
@@ -12,8 +13,8 @@ from models.rule import FirewallRule
 
 _WILDCARDS = {"any", "all", "*", "0.0.0.0/0", "::/0"}
 _ALLOW_ACTIONS = {"accept", "allow", "permit"}
-_ADMIN_SERVICES = {"all", "http", "https", "ssh", "telnet", "rdp", "ms-rdp"}
-_ADMIN_PORTS = {22, 23, 80, 443, 3389}
+_ADMIN_SERVICES = {"all", "ssh", "telnet", "rdp", "ms-rdp"}
+_ADMIN_PORTS = {22, 23, 3389}
 
 
 def _finding(
@@ -41,6 +42,11 @@ def _is_wildcard(value: str) -> bool:
 
 
 def _is_open(rule: FirewallRule) -> bool:
+    if any(
+        str(rule.metadata.get(key, "")).lower() == "enable"
+        for key in ("srcaddr-negate", "dstaddr-negate")
+    ):
+        return False
     return any(map(_is_wildcard, rule.source_addresses)) and any(
         map(_is_wildcard, rule.destination_addresses)
     )
@@ -50,15 +56,18 @@ def _expand_address_group(
     name: str, config: FirewallConfig, visited: set[str] | None = None
 ) -> set[str]:
     visited = visited or set()
-    if name in visited:
+    key = name.casefold()
+    if key in visited:
         return set()
-    visited.add(name)
+    visited.add(key)
     members = next(
         (value for group, value in config.address_groups.items() if group.lower() == name.lower()),
         None,
     )
     if members is None:
         return {name}
+    if any(group.lower() == name.lower() for group in config.excluded_address_groups):
+        return set()
     return set().union(
         *(_expand_address_group(member, config, visited.copy()) for member in members)
     )
@@ -93,6 +102,36 @@ def _admin_vips(config: FirewallConfig) -> set[str]:
         if _public_vip(vip)
         or any(interface.lower() in wan for interface in vip.get("extintf", "").split())
     }
+
+
+def _vip_may_publish_admin(vip: dict[str, str]) -> bool:
+    if vip.get("portforward", "").lower() != "enable":
+        return True
+    if vip.get("protocol", "tcp").lower() != "tcp":
+        return False
+    return port_ranges_match([vip.get("mappedport", "")], _ADMIN_PORTS)
+
+
+def _vip_ports_exclude_legacy(rule: FirewallRule, config: FirewallConfig) -> bool:
+    if str(rule.metadata.get("dstaddr-negate", "")).lower() == "enable":
+        return False
+    vips = {vip["name"].casefold(): vip for vip in config.virtual_ips}
+    if not rule.destination_addresses:
+        return False
+    for destination in rule.destination_addresses:
+        vip = vips.get(destination.casefold())
+        if not vip or vip.get("portforward", "").lower() != "enable":
+            return False
+        ports = [vip.get("extport", ""), vip.get("mappedport", "")]
+        if not all(re.fullmatch(r"\d+(?:-\d+)?", port) for port in ports):
+            return False
+        for port in ports:
+            parts = [int(value) for value in port.split("-")]
+            if not (0 <= parts[0] <= parts[-1] <= 65535):
+                return False
+        if port_ranges_match(ports, LEGACY_PORTS):
+            return False
+    return True
 
 
 def run_fortigate_checks(
@@ -164,19 +203,44 @@ def run_fortigate_checks(
         )
 
     published_vips = _admin_vips(config)
-    admin_vip_rules: list[tuple[FirewallRule, list[str]]] = []
+    admin_vips = {
+        vip["name"] for vip in config.virtual_ips
+        if vip["name"] in published_vips and _vip_may_publish_admin(vip)
+    }
+    admin_vip_rules: list[tuple[FirewallRule, list[str], list[str]]] = []
     for rule in enabled_rules:
-        services = matching_rule_services(rule, config, _ADMIN_SERVICES, _ADMIN_PORTS)
+        if str(rule.metadata.get("dstaddr-negate", "")).lower() == "enable":
+            continue
         destinations = set()
         for destination in rule.destination_addresses:
             destinations.update(_expand_address_group(destination, config))
-        matches = sorted(destinations & published_vips)
+        destination_names = {destination.casefold() for destination in destinations}
+        matches = []
+        services: set[str] = set()
+        for vip in config.virtual_ips:
+            if vip["name"] not in admin_vips or vip["name"].casefold() not in destination_names:
+                continue
+            ports = set(_ADMIN_PORTS)
+            extport = vip.get("extport", "")
+            if vip.get("portforward", "").lower() == "enable":
+                if extport.isdecimal() and int(extport) <= 65535:
+                    ports.add(int(extport))
+                ports.update(port for port in (80, 443) if port_ranges_match([extport], {port}))
+            names = _ADMIN_SERVICES | ({"http"} if 80 in ports else set()) | (
+                {"https"} if 443 in ports else set()
+            )
+            matching_services = matching_rule_services(
+                rule, config, names, ports, protocols={"tcp"}
+            )
+            if matching_services:
+                matches.append(vip["name"])
+                services.update(matching_services)
         if matches and services:
-            admin_vip_rules.append((rule, services))
+            admin_vip_rules.append((rule, sorted(services), sorted(matches)))
     if admin_vip_rules:
         definition = definitions["admin-service-vip-policy"]
-        rule_ids = [rule.id for rule, _ in admin_vip_rules]
-        services = sorted({service for _, matched in admin_vip_rules for service in matched})
+        rule_ids = [rule.id for rule, _, _ in admin_vip_rules]
+        services = sorted({service for _, matched, _ in admin_vip_rules for service in matched})
         findings.append(
             _finding(
                 definition,
@@ -187,12 +251,26 @@ def run_fortigate_checks(
                         {
                             "id": rule.id,
                             "source_addresses": rule.source_addresses,
+                            "source_negated": (
+                                "Yes"
+                                if str(rule.metadata.get("srcaddr-negate", "")).lower() == "enable"
+                                else "No"
+                            ),
                             "destination_addresses": rule.destination_addresses,
                             "services": services_for_rule,
+                            "vip_port_mapping": [
+                                (
+                                    f"{vip['name']}: {vip.get('extport', 'not specified')} -> "
+                                    f"{vip.get('mappedport', 'not specified')}"
+                                )
+                                if vip.get("portforward", "").lower() == "enable"
+                                else f"{vip['name']}: no explicit port forwarding"
+                                for vip in config.virtual_ips if vip["name"] in matches
+                            ],
                         }
-                        for rule, services_for_rule in admin_vip_rules
+                        for rule, services_for_rule, matches in admin_vip_rules
                     ],
-                    "virtual_ips": sorted(published_vips),
+                    "virtual_ips": sorted(admin_vips),
                 },
             )
         )
@@ -200,15 +278,8 @@ def run_fortigate_checks(
     legacy_rules: list[tuple[FirewallRule, list[str]]] = []
     for rule in enabled_rules:
         matched = matching_rule_services(rule, config, LEGACY_NAMES, LEGACY_PORTS)
-        if matched:
+        if matched and not _vip_ports_exclude_legacy(rule, config):
             legacy_rules.append((rule, matched))
-    if legacy_rules:
-        admin_vip_ids = {rule.id for rule, _ in admin_vip_rules}
-        legacy_rules = [
-            (rule, matched)
-            for rule, matched in legacy_rules
-            if not (rule.id in admin_vip_ids and "all" in {name.lower() for name in matched})
-        ]
     if legacy_rules:
         definition = definitions["legacy-service-policy"]
         rule_ids = [rule.id for rule, _ in legacy_rules]
@@ -245,7 +316,8 @@ def run_fortigate_checks(
 
     unlogged_rules = [
         rule
-        for rule in enabled_rules
+        for rule in config.rules
+        if rule.enabled and rule.action.lower() in _ALLOW_ACTIONS | {"deny"}
         if rule.logging and rule.logging.lower() in {"disable", "off"}
     ]
     if unlogged_rules:
@@ -260,28 +332,44 @@ def run_fortigate_checks(
             )
         )
 
-    if config.admin_account_count and not config.aaa_servers:
+    if config.admin_account_count and (
+        not config.aaa_servers or not config.remote_auth_admin_count
+    ):
         definition = definitions["local-admin-auth"]
+        auth_observation = (
+            "No configured RADIUS, LDAP or TACACS+ server was identified."
+            if not config.aaa_servers
+            else "No administrator account was explicitly configured for remote authentication."
+        )
         findings.append(
             _finding(
                 definition,
-                {"admin_count": number_as_words(config.admin_account_count)},
+                {
+                    "admin_count": number_as_words(config.admin_account_count),
+                    "auth_observation": auth_observation,
+                },
                 ["Administrator authentication"],
                 {
                     "administrator_accounts": config.admin_account_count,
                     "remote_auth_accounts": config.remote_auth_admin_count,
-                    "central_authentication_servers": 0,
+                    "central_authentication_servers": len(config.aaa_servers),
                 },
             )
         )
 
-    if not config.ntp.get("servers"):
+    sync_state = config.ntp.get("ntpsync", "not configured")
+    if sync_state.lower() == "disable" or not config.ntp.get("servers"):
         definition = definitions["ntp-server-review"]
-        sync_state = config.ntp.get("ntpsync", "not configured")
         findings.append(
             _finding(
                 definition,
-                {"sync_state": sync_state},
+                {
+                    "time_observation": (
+                        "NTP synchronisation is explicitly disabled."
+                        if sync_state.lower() == "disable"
+                        else "No explicit NTP server entry was found."
+                    )
+                },
                 ["NTP configuration"],
                 {"ntp": config.ntp},
             )

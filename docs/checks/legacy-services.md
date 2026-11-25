@@ -5,10 +5,12 @@ commonly associated with clear-text or legacy protocols. These include HTTP,
 FTP, Telnet, RSH/Rlogin, NetBIOS, SNMP, and TFTP.
 
 The parser considers built-in service names, configured custom TCP/UDP/SCTP
-port ranges, and service groups. A policy referencing `ALL` is treated as a
-broad-service review indicator because it can include legacy protocols. When
-an administrative VIP check already covers an `ALL` service, that policy is
-not duplicated in this finding.
+destination port ranges, and service groups. FortiOS source-port constraints
+are not treated as destination ports. A policy referencing `ALL` is a
+broad-service review indicator because it can include legacy protocols.
+Where every directly referenced VIP explicitly forwards only non-legacy ports,
+the policy is not reported solely because of its service definition; complex
+VIP groups and unrecognised mappings still require manual review.
 
 Cisco ASA/FTD reviews bound permit and trust ACL entries and supported
 service-group port definitions. Unresolved expressions are reported as

@@ -6,8 +6,10 @@ configured session helpers.
 
 ## Logging
 
-`logging-coverage-gap` is raised when no enabled remote Syslog or FortiAnalyzer
-destination is identified. `policy-logging-gap` reports enabled policies that
+`logging-coverage-gap` is raised when no explicitly enabled remote destination
+with a server is identified in the parsed Syslog or FortiAnalyzer settings.
+Other logging mechanisms are not assessed. `policy-logging-gap` reports enabled
+allow or deny policies that
 explicitly disable traffic logging; policies whose logging behavior is not
 explicitly set are not assumed to be disabled.
 
@@ -16,7 +18,8 @@ access controls, alerting, and ingestion at the central platform.
 
 ## Time synchronization
 
-`ntp-server-review` is raised when no explicit NTP server entry is found. The
+`ntp-server-review` is raised when NTP synchronisation is explicitly disabled
+or no explicit NTP server entry is found. The
 check does not verify time synchronization or trustworthiness of a configured
 provider. Confirm approved time sources and restrict NTP access appropriately.
 

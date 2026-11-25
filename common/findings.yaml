@@ -56,14 +56,14 @@ findings:
       - title: "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy"
         url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
   admin-service-vip-policy:
-    title: Policy permits administrative services through a WAN-facing VIP
-    commentary_title: Administrative Services Permitted via Virtual IPs
+    title: Potential administrative access through a WAN-facing VIP requires review
+    commentary_title: Potential Administrative Access via Virtual IPs
     category: access-control
     severity: high
     description: >-
-      Enabled policy {rule_ids} permits {services} to a virtual IP configured
-      on a WAN-facing interface. Verify that the mapped service is intended,
-      source-restricted, and not a management plane for a network device.
+      Enabled policy {rule_ids} references {services} and a public or
+      WAN-facing virtual IP that may permit SSH, Telnet or RDP access.
+      Confirm the mapped service, source restrictions and business requirement.
     impact: >-
       If reachable from untrusted networks, administrative services on the
       mapped systems may be exposed to credential attacks or exploitation.
@@ -73,15 +73,14 @@ findings:
       The configured services and virtual IPs do not establish the purpose of the
       mapped systems or confirm that they are externally reachable.
     executive_summary: >-
-      Firewall policies permitted connections to systems that may be accessible
-      from outside the organisation using services commonly associated with
-      system administration. Where accessible
+      Firewall policies may allow remote administration of systems that could
+      be accessible from outside the organisation. Where accessible
       from untrusted networks, these services may increase exposure to credential
       attacks or exploitation of vulnerable systems.
     recommendation: >-
-      Remove unnecessary administrative-service publishing. If required,
-      restrict source networks, use a hardened management gateway, and verify
-      the mapped host and service owner.
+      Confirm the mapped service, owner, source address group and upstream
+      reachability. Remove unnecessary administrative access; where required,
+      restrict sources and use an appropriately secured management gateway.
     references:
       - title: "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy"
         url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
@@ -121,9 +120,9 @@ findings:
     category: logging
     severity: medium
     description: >-
-      No enabled Syslog or FortiAnalyzer destination was identified. Without
-      centralized event collection, incident investigation and monitoring may
-      be incomplete.
+      No explicitly enabled destination with a server was identified in the
+      parsed Syslog or FortiAnalyzer settings. Other logging methods and
+      operational log collection were not established by this check.
     impact: >-
       Missing centralized logs can reduce detection visibility and limit
       evidence available for incident investigation.
@@ -133,8 +132,8 @@ findings:
       an identified destination, the availability of these events for central
       monitoring could not be established.
     executive_summary: >-
-      No enabled central logging destination was identified, which may reduce
-      monitoring visibility and the evidence available for investigations.
+      No enabled destination was identified in the supported logging settings,
+      so central collection and investigation capability require verification.
     recommendation: >-
       Configure an approved centralized logging destination, enable the
       required event categories and policy logging, and validate ingestion,
@@ -156,10 +155,10 @@ findings:
       Unlogged traffic can leave gaps in monitoring and incident investigation.
     commentary_impact: >-
       Where traffic is not logged and equivalent monitoring is unavailable,
-      connections permitted by these policies may be harder to investigate or
+      connections allowed or denied by these policies may be harder to investigate or
       correlate with other security events.
     executive_summary: >-
-      Traffic logging was explicitly disabled on some permitted policies,
+      Traffic logging was explicitly disabled on some enabled policies,
       potentially leaving gaps in monitoring and incident investigations.
     recommendation: >-
       Enable policy logging where operationally appropriate and ensure
@@ -168,14 +167,14 @@ findings:
       - title: "NIST SP 800-92: Guide to Computer Security Log Management"
         url: https://csrc.nist.gov/pubs/sp/800/92/final
   local-admin-auth:
-    title: Firewall administrators have no configured central AAA server
+    title: Administrator authentication requires review
     commentary_title: Administrative Authentication Configuration
     category: administration
     severity: medium
     description: >-
-      {admin_count} administrator account(s) were identified, but no configured
-      RADIUS, LDAP, or TACACS+ server was found. Authentication centralization
-      and account lifecycle controls should be reviewed.
+      {admin_count} administrator account(s) were identified. {auth_observation}
+      Other authentication mechanisms and effective access could not be
+      established from these settings alone.
     impact: >-
       Reliance on local accounts can make consistent access control, account
       lifecycle management, and administrator auditing harder to enforce.
@@ -184,9 +183,9 @@ findings:
       management, accountability and auditing. Reliance on locally managed
       accounts may make these controls more difficult to enforce consistently.
     executive_summary: >-
-      No central authentication service was identified for administrative access
-      to the firewall, which may make access management, accountability and
-      auditing more difficult to enforce consistently.
+      Centralised authentication for firewall administrators could not be
+      confirmed from the reviewed settings, which may make access management,
+      accountability and auditing more difficult to enforce consistently.
     recommendation: >-
       Where supported by operational requirements, use centrally managed
       administrator authentication with MFA. Review local accounts, trusted
@@ -195,29 +194,29 @@ findings:
       - title: "NIST SP 800-63B-4: Authentication and Authenticator Management"
         url: https://csrc.nist.gov/pubs/sp/800/63/b/4/final
   ntp-server-review:
-    title: No explicit trusted NTP server is configured
+    title: Firewall time source requires verification
     commentary_title: Time Synchronisation Configuration
     category: monitoring
     severity: medium
     description: >-
-      NTP synchronization is {sync_state}, but no explicit NTP server entry
-      was found in the configuration. The time source and its trust boundary
-      could not be verified.
+      {time_observation} The active time source and its trust boundary
+      could not be verified from the configuration alone.
     impact: >-
       Inaccurate or untrusted timestamps can hinder correlation of events and
       the investigation of security incidents.
     commentary_impact: >-
       Accurate and trusted timestamps support security monitoring, event
-      correlation and investigations. Without an explicit server entry, it was
-      not possible to determine the time source or whether firewall logs are
-      synchronised with the wider monitoring infrastructure.
+      correlation and investigations. Where synchronisation is disabled or
+      the time source cannot be verified, firewall logs may not align with
+      the wider monitoring infrastructure.
     executive_summary: >-
-      The configured time source could not be verified through an explicitly
-      defined Network Time Protocol (NTP) server, potentially affecting the
-      accuracy of event timestamps and the effectiveness of security investigations.
+      The configured time source or Network Time Protocol (NTP) synchronisation
+      could not be verified, potentially affecting the accuracy of event
+      timestamps and the effectiveness of security investigations.
     recommendation: >-
-      Configure approved time sources, restrict NTP access to those sources,
-      and verify synchronized time across the firewall and monitoring systems.
+      Confirm the configured or default time source is approved and operating,
+      restrict NTP access where appropriate, and verify synchronisation across
+      the firewall and monitoring systems.
     references:
       - title: "RFC 8915: Network Time Security for the Network Time Protocol"
         url: https://www.rfc-editor.org/info/rfc8915

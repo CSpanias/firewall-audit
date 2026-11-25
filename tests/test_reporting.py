@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from contextlib import redirect_stderr, redirect_stdout
+from copy import deepcopy
 from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +20,7 @@ from analysis.assessment_context import (
     find_temporary_access,
 )
 from analysis.fortigate_checks import run_fortigate_checks
+from analysis.services import service_matches
 from cli.audit import run_audit_workflow
 from cli.main import build_parser
 from common.finding_definitions import load_finding_definitions
@@ -315,8 +317,10 @@ class FortiOSReportingTests(unittest.TestCase):
         )
         self.assertIn("`assessment-host` (`10.1.0.35`)", report["technical_commentary"])
         self.assertIn(
-            "Rules dedicated to these hosts were excluded", report["technical_commentary"]
+            "Dedicated rules for this host were excluded", report["technical_commentary"]
         )
+        self.assertIn("host was used for testing", report["technical_commentary"])
+        self.assertNotIn("were supplied", report["technical_commentary"])
         self.assertNotIn("### Assessment IP context", report["technical_commentary"])
         self.assertNotIn("Unresolved reference", report["technical_commentary"])
         self.assertIn("other-host: 10.1.0.26", report["technical_commentary"])
@@ -335,14 +339,11 @@ class FortiOSReportingTests(unittest.TestCase):
             {
                 "broad-allow-rule",
                 "admin-services-on-wan",
-                "admin-service-vip-policy",
                 "legacy-service-policy",
                 "policy-logging-gap",
                 "ntp-server-review",
             },
         )
-        vip_finding = next(item for item in findings if item.id == "admin-service-vip-policy")
-        self.assertEqual(vip_finding.affected_objects, ["Policy 2"])
         legacy_finding = next(item for item in findings if item.id == "legacy-service-policy")
         self.assertEqual(legacy_finding.affected_objects, ["Policy 1", "Policy 3"])
 
@@ -353,6 +354,113 @@ class FortiOSReportingTests(unittest.TestCase):
 
         auth_finding = next(item for item in findings if item.id == "local-admin-auth")
         self.assertIn("two administrator account(s)", auth_finding.description)
+
+    def test_configured_aaa_without_remote_admins_requires_review(self) -> None:
+        self.config.remote_auth_admin_count = 0
+        finding = next(
+            item for item in run_fortigate_checks(self.config) if item.id == "local-admin-auth"
+        )
+        self.assertIn("No administrator account was explicitly configured", finding.description)
+        self.assertEqual(finding.data["central_authentication_servers"], 1)
+        commentary = build_report(self.config, [finding], self.config_path.name)[
+            "technical_commentary"
+        ]
+        self.assertIn("Other authentication mechanisms were not assessed", commentary)
+        self.assertNotIn("no RADIUS, LDAP or TACACS+ server", commentary)
+
+    def test_admin_vip_checks_mapped_ports_and_preserves_source_context(self) -> None:
+        config = deepcopy(self.config)
+        config.address_groups["excluded-admin"] = ["ssh-vip"]
+        config.excluded_address_groups.add("excluded-admin")
+        config.virtual_ips = [
+            {"name": "web-vip", "extintf": "wan1", "portforward": "enable",
+             "extport": "443", "mappedport": "443"},
+            {"name": "ssh-vip", "extintf": "wan1", "portforward": "enable",
+             "extport": "2222", "mappedport": "22"},
+            {"name": "ssh-over-web-port", "extintf": "wan1", "portforward": "enable",
+             "extport": "443", "mappedport": "22"},
+            {"name": "udp-vip", "extintf": "wan1", "portforward": "enable",
+             "extport": "22", "mappedport": "22", "protocol": "udp"},
+        ]
+        config.rules = [
+            FirewallRule(id="web", source_addresses=["all"], destination_addresses=["web-vip"],
+                         services=["ALL"], action="accept"),
+            FirewallRule(id="ssh", source_addresses=["admins"], destination_addresses=["ssh-vip"],
+                         services=["ALL"], action="accept",
+                         metadata={"srcaddr-negate": "enable"}),
+            FirewallRule(id="web-ssh", source_addresses=["all"],
+                         destination_addresses=["ssh-over-web-port"], services=["HTTPS"],
+                         action="accept"),
+            FirewallRule(id="udp", source_addresses=["all"], destination_addresses=["udp-vip"],
+                         services=["ALL"], action="accept"),
+            FirewallRule(id="excluded", source_addresses=["all"],
+                         destination_addresses=["excluded-admin"], services=["ALL"],
+                         action="accept"),
+            FirewallRule(id="negated", source_addresses=["all"], destination_addresses=["ssh-vip"],
+                         services=["SSH"], action="accept",
+                         metadata={"dstaddr-negate": "enable"}),
+        ]
+        findings = run_fortigate_checks(config)
+        admin = next(item for item in findings if item.id == "admin-service-vip-policy")
+        self.assertEqual(admin.affected_objects, ["Policy ssh", "Policy web-ssh"])
+        self.assertEqual(admin.data["rules"][0]["source_negated"], "Yes")
+        self.assertEqual(admin.data["rules"][0]["vip_port_mapping"], ["ssh-vip: 2222 -> 22"])
+        legacy = next(item for item in findings if item.id == "legacy-service-policy")
+        self.assertNotIn("Policy web", legacy.affected_objects)
+        self.assertNotIn("Policy ssh", legacy.affected_objects)
+
+    def test_negated_wildcard_is_not_reported_as_unrestricted(self) -> None:
+        config = deepcopy(self.config)
+        config.rules[0].metadata["srcaddr-negate"] = "enable"
+        self.assertNotIn("broad-allow-rule", [item.id for item in run_fortigate_checks(config)])
+
+    def test_custom_source_ports_do_not_match_as_destination_services(self) -> None:
+        config = FirewallConfig(service_definitions={
+            "source-only": {"tcp-portrange": ["443:23"]},
+            "dest-range": {"tcp-portrange": ["20-25:443"]},
+            "udp-only": {"udp-portrange": ["22"]},
+        })
+        self.assertFalse(service_matches("source-only", config, set(), {23}))
+        self.assertTrue(service_matches("dest-range", config, set(), {23}))
+        self.assertFalse(service_matches("udp-only", config, set(), {22}, protocols={"tcp"}))
+
+    def test_explicitly_unlogged_deny_policy_is_reported(self) -> None:
+        self.config.rules.append(FirewallRule(
+            id="deny-unlogged", action="deny", logging="disable", enabled=True
+        ))
+        finding = next(
+            item for item in run_fortigate_checks(self.config) if item.id == "policy-logging-gap"
+        )
+        self.assertIn("Policy deny-unlogged", finding.affected_objects)
+
+    def test_additional_syslog_destination_is_recognised(self) -> None:
+        self.config_path.write_text(
+            FORTIOS_CONFIG.replace("config log syslogd setting", "config log syslogd2 setting"),
+            encoding="utf-8",
+        )
+        config = FortigateParser().parse(str(self.config_path))
+        self.assertNotIn("logging-coverage-gap", [item.id for item in run_fortigate_checks(config)])
+
+    def test_disabled_ntp_is_reported_even_with_configured_servers(self) -> None:
+        source = FORTIOS_CONFIG.replace(
+            "    set ntpsync enable\n    set type custom\n",
+            "    set ntpsync disable\n    set type custom\n"
+            "    config ntpserver\n        edit 1\n"
+            '            set server "192.0.2.1"\n        next\n    end\n',
+        )
+        self.config_path.write_text(source, encoding="utf-8")
+        self.config = FortigateParser().parse(str(self.config_path))
+        finding = next(
+            item for item in run_fortigate_checks(self.config) if item.id == "ntp-server-review"
+        )
+        self.assertIn("synchronisation is explicitly disabled", finding.description)
+        commentary = build_report(self.config, [finding], self.config_path.name)[
+            "technical_commentary"
+        ]
+        self.assertIn("disabled, despite configured NTP server entries", commentary)
+        self.assertNotIn("no explicit NTP server entries", commentary)
+        evidence = build_source_evidence(source, self.config, [finding])[0]
+        self.assertFalse(any("absence-based" in note for note in evidence.notes))
 
     def test_reports_omit_credentials_and_render_offline_html(self) -> None:
         findings = run_fortigate_checks(self.config)
@@ -371,9 +479,8 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("The table below provides further details", html)
         self.assertNotIn("<strong>", html)
         self.assertNotIn("validated before reporting", html)
-        self.assertIn(
-            "### Administrative Services Permitted via Virtual IPs\n",
-            report["technical_commentary"],
+        self.assertNotIn(
+            "### Potential Administrative Access via Virtual IPs", report["technical_commentary"]
         )
         self.assertNotIn("WAN-facing VIP (High)", report["technical_commentary"])
         self.assertNotIn("never-include-this-secret", html)
@@ -569,13 +676,21 @@ class FortiOSReportingTests(unittest.TestCase):
             f'        set dstaddr "target-group"\n        set srcaddr "{long_address}"\n',
             1,
         ).replace(
+            '        set service "HTTPS"\n',
+            '        set service "SSH"\n',
+            1,
+        ).replace(
+            "        set mappedport 443\n",
+            "        set mappedport 22\n",
+            1,
+        ).replace(
             "    edit 3\n",
             '    edit 99\n'
             '        set srcintf "wan1"\n'
             '        set dstintf "internal"\n'
             '        set srcaddr "all"\n'
             '        set dstaddr "target-group"\n'
-            '        set service "HTTPS"\n'
+            '        set service "SSH"\n'
             '        set action accept\n'
             '    next\n'
             "    edit 3\n",
@@ -610,12 +725,16 @@ class FortiOSReportingTests(unittest.TestCase):
         excerpt = output.getvalue().split("Selected source lines; other configuration lines")[1]
         self.assertIn("Long lines were truncated", excerpt)
         self.assertNotIn(long_address, excerpt)
+        self.assertNotIn("--evidence-full", excerpt)
         rule_line = next(
             line for line in output.getvalue().splitlines() if "[admin-service-vip-policy]" in line
         )
         self.assertLessEqual(len(rule_line), 120)
 
-        args.evidence_full = True
+        args = build_parser().parse_args(
+            ["-C", str(self.config_path), "-O", str(self.directory),
+             "--evidence-full", "admin-service-vip-policy"]
+        )
         output = io.StringIO()
         with patch("cli.audit.console", Console(file=output, width=240, no_color=True)):
             run_audit_workflow(args)
@@ -623,12 +742,23 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn(long_address, excerpt)
         self.assertIn("edit 99", excerpt)
         self.assertNotIn("Sample only", excerpt)
+        self.assertNotIn("[ntp-server-review]", excerpt)
 
-    def test_full_evidence_requires_the_evidence_flag(self) -> None:
-        args = build_parser().parse_args(
-            ["-C", str(self.config_path), "--evidence-full"]
-        )
-        with self.assertRaisesRegex(ValueError, "--evidence-full requires --evidence"):
+    def test_full_evidence_without_id_and_mutually_exclusive_flags(self) -> None:
+        args = build_parser().parse_args([
+            "-C", str(self.config_path), "-O", str(self.directory), "--evidence-full"
+        ])
+        output = io.StringIO()
+        with patch("cli.audit.console", Console(file=output, width=120, no_color=True)):
+            run_audit_workflow(args)
+        self.assertIn("[broad-allow-rule]", output.getvalue())
+        self.assertIn("[ntp-server-review]", output.getvalue())
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            build_parser().parse_args([
+                "-C", str(self.config_path), "--evidence", "--evidence-full"
+            ])
+        args.evidence_full = "not-a-finding"
+        with self.assertRaisesRegex(ValueError, "No finding with ID 'not-a-finding'"):
             run_audit_workflow(args)
 
     def test_source_evidence_for_admin_auth_omits_passwords(self) -> None:
@@ -667,6 +797,20 @@ class FortiOSReportingTests(unittest.TestCase):
 
 
 class AssessmentContextTests(unittest.TestCase):
+    def test_testing_host_note_does_not_claim_unidentified_rules_were_excluded(self) -> None:
+        config = FirewallConfig(
+            vendor="Fortinet",
+            address_definitions={"test-vm": {"subnet": "192.0.2.10 255.255.255.255"}},
+            rules=[FirewallRule(id="1", source_addresses=["192.0.2.0/24"])],
+        )
+        commentary = build_report(config, [], "firewall.conf", ["192.0.2.10"])[
+            "technical_commentary"
+        ]
+        self.assertIn("The `test-vm` (`192.0.2.10`) host was used for testing.", commentary)
+        self.assertIn("No dedicated rules were identified for exclusion", commentary)
+        self.assertNotIn("were supplied", commentary)
+        self.assertNotIn("were excluded from automated findings", commentary)
+
     def test_exclusion_requires_a_fully_resolved_host_only_side(self) -> None:
         config = FirewallConfig(
             vendor="Fortinet",
@@ -951,9 +1095,9 @@ class ExecutiveSummaryTests(unittest.TestCase):
         self.assertIn("assessment highlighted areas requiring further review", paragraphs[0])
         self.assertLess(paragraphs[0].index("static assessment"), paragraphs[0].index("Although"))
         observations = paragraphs[1]
-        self.assertTrue(observations.startswith("Firewall policies permitted"))
+        self.assertTrue(observations.startswith("Firewall policies may allow"))
         self.assertIn("Additionally, some policies", observations)
-        self.assertIn("Furthermore, no central authentication service", observations)
+        self.assertIn("Furthermore, centralised authentication", observations)
         self.assertIn(
             "Moreover, while centralised logging destinations were configured", observations
         )
@@ -961,8 +1105,8 @@ class ExecutiveSummaryTests(unittest.TestCase):
         self.assertNotIn("WAN-facing virtual addresses", observations)
         self.assertIn("Finally, the configured time source", observations)
         self.assertEqual(observations.count("Finally,"), 1)
-        self.assertLess(observations.index("system administration"), observations.index("legacy"))
-        self.assertLess(observations.index("authentication service"), observations.index("logging"))
+        self.assertLess(observations.index("remote administration"), observations.index("legacy"))
+        self.assertLess(observations.index("authentication"), observations.index("logging"))
         self.assertLess(observations.index("logging"), observations.index("time source"))
         self.assertIn("Network Time Protocol (NTP)", observations)
         self.assertIn("strengthen access controls", paragraphs[2])

@@ -13,6 +13,8 @@ ACLs are excluded and reported as a parsing limitation.
 The `broad-allow-rule` check identifies enabled allow policies whose source and
 destination references include `all`, `any`, or an equivalent wildcard. It
 reports the policy ID and references as evidence.
+FortiOS rules with negated source or destination addresses are not classified
+as unrestricted solely because they reference a wildcard.
 
 This indicator does not calculate effective policy behavior. Address groups,
 policy order, routing, schedules, and other features can affect the actual
@@ -20,9 +22,10 @@ traffic decision. Review the referenced objects and intended business purpose.
 
 ## WAN VIP policy paths
 
-Policies permitting administrative services to a configured WAN-facing VIP
-are reported separately. See [Administrative exposure](administrative-exposure.md)
-for the scope and limitations of that check.
+Policies potentially permitting SSH, Telnet or RDP through a public or
+WAN-facing VIP are reported separately. See
+[Administrative exposure](administrative-exposure.md) for the scope and
+limitations of that check.
 
 ## Potential temporary access
 
