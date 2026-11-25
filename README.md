@@ -92,6 +92,8 @@ python -m mkdocs build --strict
 
 ## Limitations
 
+* FortiOS VDOM-scoped configuration exports are not supported and are rejected
+  rather than reviewed as an incomplete configuration.
 * WatchGuard PDF source and destination addresses, services, and detailed
   settings are not parsed. The report is an inventory, not a security review.
 * Cisco ACL checks do not calculate effective policy order or reachability.

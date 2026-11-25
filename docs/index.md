@@ -21,6 +21,7 @@ describes current findings and their evidence.
 FortiOS and Cisco ASA/FTD text exports are supported. WatchGuard Firebox
 configuration report PDFs are supported for policy inventory only; no
 automated security checks are run on those reports.
+FortiOS VDOM-scoped exports are not supported and are rejected.
 
 !!! warning "Review indicators"
     A static configuration export cannot establish runtime reachability,

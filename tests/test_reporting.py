@@ -200,6 +200,21 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertEqual(len(self.config.vpns), 2)
         self.assertEqual(self.config.remote_auth_admin_count, 1)
 
+    def test_vdom_export_is_rejected_without_writing_reports(self) -> None:
+        self.config_path.write_text(
+            'config vdom\n edit "root"\n  config firewall policy\n'
+            '   edit 1\n    set action accept\n   next\n  end\n next\nend\n',
+            encoding="utf-8",
+        )
+        output_dir = self.directory / "reports"
+        args = build_parser().parse_args([
+            "--config", str(self.config_path), "--output-dir", str(output_dir)
+        ])
+
+        with self.assertRaisesRegex(ValueError, "VDOM-scoped.*not supported"):
+            run_audit_workflow(args)
+        self.assertFalse(output_dir.exists())
+
     def test_azure_platform_comes_from_the_fortios_header(self) -> None:
         self.config_path.write_text(
             FORTIOS_CONFIG.replace("FGT60F-7.4.11", "FGVMAZ-7.4.11"),
@@ -426,6 +441,32 @@ class FortiOSReportingTests(unittest.TestCase):
         legacy = next(item for item in findings if item.id == "legacy-service-policy")
         self.assertNotIn("Policy web", legacy.affected_objects)
         self.assertIn("Policy ssh", legacy.affected_objects)
+
+    def test_any_interface_vip_requires_wan_policy_ingress(self) -> None:
+        config = deepcopy(self.config)
+        config.zones["OUTSIDE"] = ["wan1"]
+        config.virtual_ips = [{
+            "name": "ssh-vip", "extintf": "any", "extip": "0.0.0.0",
+            "portforward": "enable", "extport": "2222", "mappedport": "22",
+        }]
+        config.rules = [
+            FirewallRule(id=rule_id, source_zones=[source], source_addresses=["all"],
+                         destination_addresses=["ssh-vip"], services=["ALL"], action="accept")
+            for rule_id, source in (
+                ("wan", "wan1"), ("zone", "OUTSIDE"), ("any", "any"), ("lan", "internal")
+            )
+        ]
+
+        admin = next(
+            item for item in run_fortigate_checks(config) if item.id == "admin-service-vip-policy"
+        )
+        self.assertEqual(admin.affected_objects, ["Policy wan", "Policy zone", "Policy any"])
+        self.assertEqual(admin.data["virtual_ips"], ["ssh-vip"])
+
+        config.interface_details[0].enabled = False
+        self.assertNotIn(
+            "admin-service-vip-policy", [item.id for item in run_fortigate_checks(config)]
+        )
 
     def test_negated_wildcard_is_not_reported_as_unrestricted(self) -> None:
         config = deepcopy(self.config)

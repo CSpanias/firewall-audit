@@ -22,6 +22,8 @@ reviewed based on the policy's service definitions. Negated destinations and
 groups with exclusions are not treated as positive VIP references.
 Port-forwarding VIPs without a recognisable mapped port are not classified
 by this check.
+VIPs bound to `any` interface are also considered when the policy permits
+traffic from a recognised WAN interface or zone.
 
 Check the source scope, VIP mapping, target system, and business owner. A VIP
 may publish a management interface belonging to another device; the static

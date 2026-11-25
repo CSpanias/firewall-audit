@@ -88,7 +88,7 @@ def _public_vip(vip: dict[str, str]) -> bool:
 
 def _wan_interfaces(config: FirewallConfig) -> set[str]:
     return {
-        interface.name.lower()
+        interface.name.casefold()
         for interface in config.interface_details
         if interface.enabled and interface.internet_facing
     }
@@ -100,8 +100,21 @@ def _admin_vips(config: FirewallConfig) -> set[str]:
         vip["name"]
         for vip in config.virtual_ips
         if _public_vip(vip)
-        or any(interface.lower() in wan for interface in vip.get("extintf", "").split())
+        or any(interface.casefold() in wan for interface in vip.get("extintf", "").split())
     }
+
+
+def _rule_from_wan(rule: FirewallRule, config: FirewallConfig, wan: set[str]) -> bool:
+    for source in rule.source_zones:
+        name = source.casefold()
+        if (name == "any" and wan) or name in wan:
+            return True
+        if any(
+            zone.casefold() == name and any(member.casefold() in wan for member in members)
+            for zone, members in config.zones.items()
+        ):
+            return True
+    return False
 
 
 def _vip_may_publish_admin(vip: dict[str, str]) -> bool:
@@ -202,6 +215,7 @@ def run_fortigate_checks(
             )
         )
 
+    wan = _wan_interfaces(config)
     published_vips = _admin_vips(config)
     admin_vips = {
         vip["name"] for vip in config.virtual_ips
@@ -217,7 +231,11 @@ def run_fortigate_checks(
         destination_names = {destination.casefold() for destination in destinations}
         matches: dict[str, list[str]] = {}
         for vip in config.virtual_ips:
-            if vip["name"] not in admin_vips or vip["name"].casefold() not in destination_names:
+            if vip["name"].casefold() not in destination_names or not _vip_may_publish_admin(vip):
+                continue
+            if vip["name"] not in admin_vips and not (
+                vip.get("extintf", "").casefold() == "any" and _rule_from_wan(rule, config, wan)
+            ):
                 continue
             ports = set(_ADMIN_PORTS)
             extport = vip.get("extport", "")
@@ -294,7 +312,9 @@ def run_fortigate_checks(
                         }
                         for rule, matches in admin_vip_rules
                     ],
-                    "virtual_ips": sorted(admin_vips),
+                    "virtual_ips": sorted(admin_vips | {
+                        name for _, matches in admin_vip_rules for name in matches
+                    }),
                 },
             )
         )

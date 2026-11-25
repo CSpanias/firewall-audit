@@ -171,6 +171,11 @@ class FortigateParser:
         source = Path(filepath)
         lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
         roots = _parse_document(lines)
+        if _configs(roots, "vdom"):
+            raise ValueError(
+                "FortiOS VDOM-scoped configuration exports are not supported. "
+                "A separate supported configuration export is required."
+            )
         config = FirewallConfig(vendor="Fortinet")
 
         for line in lines:
