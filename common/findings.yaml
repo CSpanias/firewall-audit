@@ -218,3 +218,31 @@ findings:
     references:
       - title: "RFC 8915: Network Time Security for the Network Time Protocol"
         url: https://www.rfc-editor.org/info/rfc8915
+  temporary-access-review:
+    title: Potential temporary access requires review
+    commentary_title: Potential Temporary or Assessment Access
+    category: access-control
+    severity: info
+    description: >-
+      Enabled allow rules {rule_ids} explicitly reference a supplied assessment
+      host or contain terms suggesting temporary or testing-related access.
+      The intended duration and continued need could not be established.
+    impact: >-
+      Access that is no longer required may retain unnecessary connectivity
+      between systems and increase the potential attack surface.
+    commentary_impact: >-
+      Temporary access that remains in place beyond its intended use may permit
+      unnecessary connections. The configuration alone does not establish when
+      the access was approved, whether it has expired or whether it remains
+      required.
+    executive_summary: >-
+      Some rules explicitly referenced assessment hosts or included terms
+      suggesting temporary or testing-related access. Their intended duration
+      and continued business need could not be established from the configuration.
+    recommendation: >-
+      Confirm the owner, purpose and approved duration of the affected access
+      with the firewall owner. Remove access that is no longer required and
+      document or time-limit any access that must remain.
+    references:
+      - title: "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy"
+        url: https://csrc.nist.gov/pubs/sp/800/41/r1/final

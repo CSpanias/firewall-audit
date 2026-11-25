@@ -105,6 +105,33 @@ class CiscoParserTests(unittest.TestCase):
         )
         self.assertNotIn("`fw-example` (Cisco)", report["technical_commentary"])
 
+    def test_assessment_ip_resolves_nested_cisco_address_objects(self) -> None:
+        config = CiscoParser().parse(str(self.path))
+        findings = run_cisco_checks(config)
+        report = build_report(config, findings, self.path.name, ["10.1.1.1"])
+        matches = report["assessment_context"]["matches"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["rule_type"], "ACL entry")
+        self.assertEqual(matches[0]["direction"], "Destination")
+        self.assertEqual(matches[0]["reference"], "targets")
+        unannotated = build_report(config, findings, self.path.name)
+        self.assertNotIn("assessment_context", unannotated)
+        self.assertEqual(report["findings"], unannotated["findings"])
+
+    def test_temporary_access_only_flags_enabled_bound_cisco_entries(self) -> None:
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                "access-list EDGE extended permit ip host 10.1.1.1 any\n"
+                "access-list UNUSED extended permit ip host 10.1.1.1 any\n"
+                "access-list EDGE extended deny ip host 10.1.1.1 any\n"
+            )
+        config = CiscoParser().parse(str(self.path))
+        findings = run_cisco_checks(config, ["10.1.1.1"])
+        temporary = next(item for item in findings if item.id == "temporary-access-review")
+        self.assertEqual(len(temporary.affected_objects), 2)
+        self.assertTrue(all("EDGE" in rule for rule in temporary.affected_objects))
+        self.assertEqual(len(temporary.data["rules"]), 2)
+
 
 class _Page:
     def __init__(self, text: str, layout: str) -> None:
@@ -134,6 +161,11 @@ Firewall Policies Details
         self.assertEqual(config.model, "Firebox Example")
         report = build_report(config, [], "report.pdf")
         self.assertIn("| Model | Firebox Example |", report["technical_commentary"])
+        report_with_context = build_report(config, [], "report.pdf", ["192.0.2.1"])
+        self.assertIn(
+            "assessment IP matches could not be evaluated",
+            report_with_context["technical_commentary"],
+        )
         self.assertEqual(
             [(r.id, r.name, r.enabled) for r in config.rules],
             [

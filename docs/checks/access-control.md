@@ -23,3 +23,16 @@ traffic decision. Review the referenced objects and intended business purpose.
 Policies permitting administrative services to a configured WAN-facing VIP
 are reported separately. See [Administrative exposure](administrative-exposure.md)
 for the scope and limitations of that check.
+
+## Potential temporary access
+
+The `temporary-access-review` check flags enabled allow rules whose names or
+comments contain temporary or testing-related terms, or which explicitly
+reference a host supplied using `--assessment-ip`. A matching subnet alone is
+not treated as proof that a rule is for testing. Evidence includes source
+references and supported resolved scopes, services, the configured schedule
+and the reason for review. Cisco checks are limited to bound ACLs.
+
+These are indicators for owner review, not proof that access is temporary,
+expired or no longer required. Creation dates, ownership and the effective
+expiry of named schedules cannot be established by this check.

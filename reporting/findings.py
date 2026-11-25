@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from analysis.assessment_context import build_assessment_context
 from models.finding import Finding
 from models.firewall import FirewallConfig
 from reporting.narrative import build_narratives
@@ -14,6 +15,7 @@ def build_report(
     config: FirewallConfig,
     findings: list[Finding],
     source_name: str,
+    assessment_ips: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a versioned, vendor-neutral assessment document."""
     interfaces = [
@@ -179,6 +181,8 @@ def build_report(
     }
     for key in config.unavailable_inventory:
         report["inventory"][key] = None
+    if assessment_ips:
+        report["assessment_context"] = build_assessment_context(config, assessment_ips)
     report.update(build_narratives(report))
     return report
 

@@ -30,9 +30,12 @@ uv sync --group dev
 ```powershell
 firewall-audit --config firewall.conf
 firewall-audit -C firewall.conf --output-dir reports
+firewall-audit -C firewall.conf --assessment-ip 192.0.2.10
 ```
 
 Each run generates a timestamped JSON report and a self-contained HTML report.
+Repeat `--assessment-ip` for multiple testing hosts. Matching rule references
+are recorded as assessment context, not excluded or downgraded.
 
 The HTML report works offline and provides an executive summary, technical
 commentary with supporting evidence, and remediation guidance. Each section
@@ -53,11 +56,13 @@ FortiOS checks identify:
 * Management services enabled on WAN-facing interfaces.
 * Administrative services permitted to WAN-facing VIPs.
 * Enabled allow policies referencing clear-text or legacy services.
+* Potential temporary or testing-related access requiring owner review.
 * Missing remote logging and explicitly disabled policy logging.
 * Missing explicit NTP server entries.
 
-Cisco checks review bound ACL entries for unrestricted endpoints and
-clear-text, legacy, or unrestricted services. Standard ACLs are not included.
+Cisco checks review bound ACL entries for unrestricted endpoints, potential
+temporary access, and clear-text, legacy, or unrestricted services. Standard
+ACLs are not included.
 The WatchGuard PDF parser currently inventories policy names, order, state,
 action, and logging only; it does not run security checks.
 

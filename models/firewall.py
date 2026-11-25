@@ -51,6 +51,7 @@ class FirewallConfig:
     local_in_rules: list[FirewallRule] = field(default_factory=list)
     address_definitions: dict[str, dict[str, str]] = field(default_factory=dict)
     address_groups: dict[str, list[str]] = field(default_factory=dict)
+    excluded_address_groups: set[str] = field(default_factory=set)
     service_definitions: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     service_groups: dict[str, list[str]] = field(default_factory=dict)
     virtual_ips: list[dict[str, str]] = field(default_factory=list)

@@ -9,11 +9,23 @@ in approved storage.
 ```powershell
 firewall-audit --config firewall.conf
 firewall-audit -C firewall.conf --output-dir reports
+firewall-audit -C firewall.conf --assessment-ip 192.0.2.10
 ```
 
 The workflow validates the input, detects the vendor, parses supported
 configuration sections, runs applicable review checks, and writes timestamped
 reports. Progress, findings, and parsing limitations are shown in the terminal.
+
+Use `--assessment-ip` for a known assessment host; repeat the flag to supply
+multiple IPv4 or IPv6 addresses. The report lists matching explicit, statically
+parsed source and destination references, including hosts, subnets, ranges and
+supported address groups, for firewall and local-in policies. It also lists
+references that could not be resolved. Wildcards, negated address references,
+dynamic objects, address group exclusions, and VIP/NAT mappings are not
+evaluated for this context.
+Matches do not establish that a rule is exclusive to testing or that traffic is
+permitted or reachable. No findings or severities are suppressed or changed.
+Firebox PDF inventories do not include rule addresses and cannot be matched.
 
 ## Output files
 

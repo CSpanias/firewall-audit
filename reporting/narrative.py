@@ -67,13 +67,20 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                 (name, label)
                 for name, label in (
                     ("id", "Rule"),
-                    ("name", "Interface"),
+                    ("rule_type", "Rule type"),
+                    ("name", "Rule name" if key == "rules" else "Interface"),
                     ("address", "Address"),
                     ("source_interfaces", "Source interfaces"),
                     ("destination_interfaces", "Destination interfaces"),
                     ("source_addresses", "Source"),
+                    ("source_address_scopes", "Resolved source scopes"),
+                    ("unresolved_source_references", "Unresolved source references"),
+                    ("source_negated", "Source negated"),
                     ("destination_addresses", "Destination"),
+                    ("destination_negated", "Destination negated"),
                     ("services", "Services"),
+                    ("schedule", "Schedule"),
+                    ("indicators", "Review indicators"),
                 )
                 if any(name in item for item in entries)
             ]
@@ -172,7 +179,12 @@ def _executive_summary(report: dict[str, Any]) -> str:
             observations[index] = f"{transition}, {text[0].lower()}{text[1:]}"
         summary.append(" ".join(observations))
         improvements = []
-        if seen & {"broad-allow-rule", "admin-service-vip-policy", "legacy-service-policy"}:
+        if seen & {
+            "broad-allow-rule",
+            "admin-service-vip-policy",
+            "legacy-service-policy",
+            "temporary-access-review",
+        }:
             improvements.append("strengthen access controls")
         if seen & {"admin-services-on-wan", "admin-service-vip-policy", "local-admin-auth"}:
             improvements.append("improve administrative security")
@@ -249,6 +261,11 @@ def _commentary_observation(finding_id: str, findings: list[dict[str, Any]], ven
         )
     if finding_id == "policy-logging-gap" and count:
         return f"Traffic logging was explicitly disabled on {subject.lower()}."
+    if finding_id == "temporary-access-review":
+        return (
+            "Enabled allow rules explicitly referenced supplied assessment hosts or contained "
+            "terms suggesting temporary or testing-related access."
+        )
     if finding_id == "admin-services-on-wan":
         return (
             "Administrative services were enabled on interfaces identified as WAN-facing "
@@ -336,6 +353,74 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
             ],
         ),
     ]
+    context = report.get("assessment_context")
+    if context:
+        section = [
+            "### Assessment IP context",
+            "The following IP addresses were supplied as assessment hosts: "
+            + _prose_list(context["addresses"])
+            + ". Findings have not been excluded or downgraded on this basis.",
+        ]
+        if not context["addresses_available"]:
+            section.append(
+                "The supplied configuration did not provide parsed rule addresses, "
+                "so assessment IP matches could not be evaluated."
+            )
+        elif context["matches"]:
+            section.append(
+                "The table identifies explicit address references containing an assessment IP. "
+                "A match does not establish that the rule is solely for testing, that it "
+                "permits traffic, or that the traffic is reachable."
+            )
+            section.append(
+                _table(
+                    [
+                        "Assessment IP",
+                        "Rule type",
+                        "Rule",
+                        "Side",
+                        "Address reference",
+                        "Match",
+                        "Status",
+                        "Action",
+                    ],
+                    [
+                        [
+                            item["address"],
+                            item["rule_type"],
+                            item["rule_id"],
+                            item["direction"],
+                            item["reference"],
+                            item["match_types"],
+                            "Enabled" if item["enabled"] else "Disabled",
+                            item["action"],
+                        ]
+                        for item in context["matches"]
+                    ],
+                )
+            )
+        else:
+            section.append(
+                "No explicit parsed rule address references matched the supplied IPs. "
+                "This does not establish that the hosts have no access."
+            )
+        if context["addresses_available"]:
+            section.append(
+                "Wildcard addresses, negated address references, dynamic objects, address "
+                "group exclusions and VIP/NAT mappings are not evaluated for these matches."
+            )
+        if context["unresolved_references"]:
+            section.append("The following address references could not be resolved:")
+            section.append(
+                _table(
+                    ["Rule type", "Rule", "Side", "Unresolved reference"],
+                    [
+                        [item["rule_type"], item["rule_id"], item["direction"], item["reference"]]
+                        for item in context["unresolved_references"]
+                    ],
+                )
+            )
+        commentary.append("\n\n".join(section))
     if report.get("parse_warnings"):
         commentary.append(
             "### Parsing limitations\n\n"
@@ -344,6 +429,16 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     if not findings and report.get("checks_run", True):
         commentary.append("No findings were identified by the applicable checks.")
     grouped: dict[str, list[dict[str, Any]]] = {}
+    context_objects = set()
+    if context:
+        labels = {
+            "ACL entry": "Rule",
+            "Firewall policy": "Policy",
+            "Local-in policy": "Local-in policy",
+        }
+        context_objects = {
+            f"{labels[match['rule_type']]} {match['rule_id']}" for match in context["matches"]
+        }
     for index, finding in enumerate(findings):
         key = finding.get("id") or f"unnamed-{index}"
         grouped.setdefault(key, []).append(finding)
@@ -367,6 +462,12 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
         affected = list(
             dict.fromkeys(item for entry in group for item in entry.get("affected_objects", []))
         )
+        if context_objects.intersection(affected):
+            sections.append(
+                "One or more affected rules include an address scope containing a supplied "
+                "assessment IP. The assessment IP context table identifies the matching "
+                "rules and address references."
+            )
         if key == "broad-allow-rule":
             entries = []
             for entry in group:

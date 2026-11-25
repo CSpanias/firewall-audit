@@ -1,12 +1,23 @@
 """Command-line entry point for Firewall-Audit."""
 
 import argparse
+import ipaddress
 from textwrap import dedent
 
 from rich.text import Text
 
 from cli.audit import run_audit_workflow
 from common.console import console
+
+
+def _assessment_ip(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid assessment IP address: {value}") from exc
+    if isinstance(address, ipaddress.IPv6Address) and address.scope_id is not None:
+        raise argparse.ArgumentTypeError("Assessment IPv6 addresses cannot include a scope ID.")
+    return str(address)
 
 
 class HelpFormatter(
@@ -43,6 +54,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="firewall-audit",
         metavar="DIR",
         help="Directory for generated reports.",
+    )
+    parser.add_argument(
+        "--assessment-ip",
+        action="append",
+        type=_assessment_ip,
+        default=[],
+        metavar="IP",
+        help="Identify an assessment host IP for rule context; may be specified more than once.",
     )
     parser.add_argument(
         "--csacyber",

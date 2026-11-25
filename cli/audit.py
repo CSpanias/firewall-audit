@@ -61,14 +61,14 @@ def run_audit_workflow(args: Namespace) -> None:
 
         progress.update(task, description="Analyzing security controls and writing reports")
         if vendor == "fortigate":
-            findings = run_fortigate_checks(config)
+            findings = run_fortigate_checks(config, args.assessment_ip)
         elif vendor == "cisco":
-            findings = run_cisco_checks(config)
+            findings = run_cisco_checks(config, args.assessment_ip)
         elif vendor == "watchguard":
             findings = []
         else:
             raise ValueError(f"No analysis workflow is available for detected vendor: {vendor}.")
-        report = build_report(config, findings, config_path.name)
+        report = build_report(config, findings, config_path.name, args.assessment_ip)
 
         output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -94,6 +94,17 @@ def run_audit_workflow(args: Namespace) -> None:
     console.print()
     console.print(build_findings_table(findings))
     console.print()
+    if args.assessment_ip:
+        context = report["assessment_context"]
+        if not context["addresses_available"]:
+            warn("Assessment IP matching is unavailable because rule addresses were not parsed.")
+        else:
+            console.print(
+                f"Assessment IP context: {len(context['matches'])} explicit "
+                "rule reference match(es)."
+            )
+            if context["unresolved_references"]:
+                warn("Some address references could not be resolved; see the report for details.")
     if config.checks_supported:
         success(f"Assessment complete: {len(findings)} finding(s) identified.")
     else:

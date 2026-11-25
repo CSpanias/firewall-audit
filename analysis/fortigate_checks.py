@@ -2,6 +2,7 @@
 
 import ipaddress
 
+from analysis.assessment_context import find_temporary_access
 from analysis.services import LEGACY_NAMES, LEGACY_PORTS, matching_rule_services
 from common.finding_definitions import load_finding_definitions
 from common.text import number_as_words
@@ -94,7 +95,9 @@ def _admin_vips(config: FirewallConfig) -> set[str]:
     }
 
 
-def run_fortigate_checks(config: FirewallConfig) -> list[Finding]:
+def run_fortigate_checks(
+    config: FirewallConfig, assessment_ips: list[str] | None = None
+) -> list[Finding]:
     """Run the currently supported FortiGate review checks."""
     definitions = load_finding_definitions()
     findings: list[Finding] = []
@@ -283,4 +286,5 @@ def run_fortigate_checks(config: FirewallConfig) -> list[Finding]:
             )
         )
 
+    findings.extend(find_temporary_access(config, assessment_ips))
     return findings

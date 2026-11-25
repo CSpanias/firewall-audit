@@ -6,12 +6,13 @@ import os
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from html.parser import HTMLParser
 from pathlib import Path
 
 from rich.console import Console
 
+from analysis.assessment_context import build_assessment_context, find_temporary_access
 from analysis.fortigate_checks import run_fortigate_checks
 from cli.audit import run_audit_workflow
 from cli.main import build_parser
@@ -236,6 +237,72 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIsNone(config.platform_identifier)
         self.assertIsNone(config.model)
 
+    def test_assessment_ip_flag_annotates_a_real_policy_without_excluding_findings(self) -> None:
+        config_text = FORTIOS_CONFIG.replace(
+            'config firewall address\n',
+            'config firewall address\n'
+            '    edit "assessment-host"\n'
+            '        set subnet 10.1.0.35 255.255.255.255\n'
+            '    next\n'
+            '    edit "other-host"\n'
+            '        set subnet 10.1.0.26 255.255.255.255\n'
+            '    next\n',
+        ).replace(
+            '        set srcaddr "all"\n',
+            '        set srcaddr "assessment-host" "other-host"\n',
+            1,
+        )
+        self.config_path.write_text(config_text, encoding="utf-8")
+        args = build_parser().parse_args(
+            [
+                "-C",
+                str(self.config_path),
+                "-O",
+                str(self.directory),
+                "--assessment-ip",
+                "10.1.0.35",
+                "--assessment-ip",
+                "10.1.0.35",
+            ]
+        )
+        run_audit_workflow(args)
+        report_path = next(self.directory.glob("fortigate-*.json"))
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        context = report["assessment_context"]
+        self.assertEqual(context["addresses"], ["10.1.0.35"])
+        self.assertEqual(
+            [
+                (item["rule_id"], item["direction"], item["reference"])
+                for item in context["matches"]
+            ],
+            [("1", "Source", "assessment-host"), ("3", "Source", "internal-net")],
+        )
+        self.assertIn("legacy-service-policy", [item["id"] for item in report["findings"]])
+        temporary = next(
+            item for item in report["findings"] if item["id"] == "temporary-access-review"
+        )
+        self.assertEqual(temporary["severity"], "info")
+        self.assertEqual(temporary["affected_objects"], ["Policy 1"])
+        self.assertEqual(
+            temporary["evidence"]["rules"][0]["source_address_scopes"],
+            ["assessment-host: 10.1.0.35", "other-host: 10.1.0.26"],
+        )
+        self.assertIn(
+            "| 10.1.0.35 | Firewall policy | 1 | Source | assessment-host |",
+            report["technical_commentary"],
+        )
+        self.assertIn(
+            "One or more affected rules include an address scope containing a supplied "
+            "assessment IP.",
+            report["technical_commentary"],
+        )
+        self.assertIn("other-host: 10.1.0.26", report["technical_commentary"])
+        self.assertNotIn("expired access", report["technical_commentary"])
+        self.assertIn(
+            "assessment-host",
+            next(self.directory.glob("fortigate-*.html")).read_text(encoding="utf-8"),
+        )
+
     def test_checks_cover_unrestricted_admin_vip_legacy_logging_and_ntp(self) -> None:
         findings = run_fortigate_checks(self.config)
         identifiers = {finding.id for finding in findings}
@@ -398,6 +465,137 @@ class FortiOSReportingTests(unittest.TestCase):
         json_path = export_json(report, self.directory / "roundtrip.json")
 
         self.assertEqual(json.loads(json_path.read_text(encoding="utf-8")), report)
+
+
+class AssessmentContextTests(unittest.TestCase):
+    def test_matches_explicit_scopes_and_reports_unresolved_references(self) -> None:
+        config = FirewallConfig(
+            vendor="Fortinet",
+            address_definitions={
+                "host": {"subnet": "10.1.0.35 255.255.255.255"},
+                "network": {"subnet": "10.1.0.0 255.255.255.0"},
+                "range": {"type": "iprange", "start-ip": "10.2.0.1", "end-ip": "10.2.0.40"},
+                "dns": {"type": "fqdn", "fqdn": "example.test"},
+            },
+            address_groups={"nested": ["host", "network", "dns"], "excluded": ["host"]},
+            excluded_address_groups={"excluded"},
+            rules=[
+                FirewallRule(
+                    id="1",
+                    source_addresses=["nested", "all", "excluded"],
+                    destination_addresses=["range"],
+                    action="accept",
+                ),
+                FirewallRule(
+                    id="2",
+                    source_addresses=["10.1.0.26"],
+                    destination_addresses=["2001:db8::1"],
+                    enabled=False,
+                    action="deny",
+                ),
+            ],
+            local_in_rules=[FirewallRule(id="3", source_addresses=["host"], action="accept")],
+        )
+        context = build_assessment_context(config, ["10.1.0.35", "10.2.0.10", "2001:db8::1"])
+        self.assertEqual(
+            [
+                (item["rule_type"], item["rule_id"], item["address"], item["match_types"])
+                for item in context["matches"]
+            ],
+            [
+                ("Firewall policy", "1", "10.1.0.35", ["host", "subnet"]),
+                ("Firewall policy", "1", "10.2.0.10", ["range"]),
+                ("Firewall policy", "2", "2001:db8::1", ["host"]),
+                ("Local-in policy", "3", "10.1.0.35", ["host"]),
+            ],
+        )
+        self.assertFalse(context["matches"][2]["enabled"])
+        self.assertEqual(context["matches"][2]["action"], "deny")
+        self.assertEqual(
+            {item["reference"] for item in context["unresolved_references"]}, {"dns", "excluded"}
+        )
+
+    def test_rejects_invalid_ip_and_never_prompts(self) -> None:
+        for value in ("10.1.0.0/24", "fe80::1%12"):
+            with self.subTest(value=value):
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    build_parser().parse_args(["-C", "config", "--assessment-ip", value])
+                self.assertEqual(error.exception.code, 2)
+
+    def test_fortigate_excluded_address_group_is_not_assumed_to_match(self) -> None:
+        config_text = FORTIOS_CONFIG.replace(
+            '    edit "target-group"\n',
+            '    edit "target-group"\n        set exclude enable\n',
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "firewall.conf"
+            path.write_text(config_text, encoding="utf-8")
+            config = FortigateParser().parse(str(path))
+        context = build_assessment_context(config, ["10.1.0.20"])
+        self.assertIn("target-group", config.excluded_address_groups)
+        self.assertIn(
+            "target-group", [item["reference"] for item in context["unresolved_references"]]
+        )
+        self.assertNotIn("target-group", [item["reference"] for item in context["matches"]])
+
+    def test_negated_policy_address_does_not_match_the_excluded_host(self) -> None:
+        config_text = FORTIOS_CONFIG.replace(
+            '        set srcaddr "internal-net"\n',
+            '        set srcaddr "internal-net"\n        set srcaddr-negate enable\n',
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "tests") as directory:
+            path = Path(directory) / "firewall.conf"
+            path.write_text(config_text, encoding="utf-8")
+            config = FortigateParser().parse(str(path))
+        context = build_assessment_context(config, ["10.1.0.35"])
+        self.assertNotIn("3", [item["rule_id"] for item in context["matches"]])
+        self.assertIn(
+            ("3", "internal-net"),
+            [(item["rule_id"], item["reference"]) for item in context["unresolved_references"]],
+        )
+        self.assertEqual(find_temporary_access(config, ["10.1.0.35"]), [])
+
+    def test_temporary_access_indicators_do_not_infer_expiry_or_subnet_purpose(self) -> None:
+        config = FirewallConfig(
+            vendor="Fortinet",
+            address_definitions={
+                "current": {"subnet": "192.0.2.10 255.255.255.255"},
+                "older": {"subnet": "192.0.2.26 255.255.255.255"},
+                "network": {"subnet": "192.0.2.0 255.255.255.0"},
+            },
+            address_groups={"testing-hosts": ["current", "older"]},
+            rules=[
+                FirewallRule(
+                    id="1",
+                    source_addresses=["testing-hosts"],
+                    action="accept",
+                    schedule="always",
+                ),
+                FirewallRule(id="2", source_addresses=["network"], action="accept"),
+                FirewallRule(id="3", name="External_PenTest", action="accept"),
+                FirewallRule(id="4", comments="Temporary access", action="deny"),
+                FirewallRule(id="5", name="Testing", action="accept", enabled=False),
+            ],
+            local_in_rules=[
+                FirewallRule(id="6", comments="Temporary admin", action="accept")
+            ],
+        )
+        findings = find_temporary_access(config, ["192.0.2.10"])
+        self.assertEqual(len(findings), 1)
+        finding = findings[0]
+        self.assertEqual(finding.affected_objects, ["Policy 1", "Policy 3", "Local-in policy 6"])
+        self.assertEqual(finding.data["rules"][0]["schedule"], "always")
+        self.assertEqual(
+            finding.data["rules"][0]["source_address_scopes"],
+            ["testing-hosts: 192.0.2.10", "testing-hosts: 192.0.2.26"],
+        )
+        self.assertEqual(
+            find_temporary_access(config)[0].affected_objects,
+            ["Policy 3", "Local-in policy 6"],
+        )
+        self.assertIn("Rule name contains: PenTest", finding.data["rules"][1]["indicators"])
+        self.assertIn("Rule comment contains: Temporary", finding.data["rules"][2]["indicators"])
+        self.assertIn("could not be established", finding.description)
 
 
 class GenericFindingTests(unittest.TestCase):

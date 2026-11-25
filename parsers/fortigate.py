@@ -149,7 +149,16 @@ def _rule(node: _Node) -> FirewallRule:
         comments=_text(node, "comments") or None,
         metadata=_text_fields(
             node,
-            ("policyid", "ippool", "poolname", "utm-status", "inspection-mode", "groups"),
+            (
+                "policyid",
+                "ippool",
+                "poolname",
+                "utm-status",
+                "inspection-mode",
+                "groups",
+                "srcaddr-negate",
+                "dstaddr-negate",
+            ),
         ),
     )
 
@@ -242,6 +251,8 @@ class FortigateParser:
                 name = " ".join(item.name)
                 config.object_groups.append(name)
                 config.address_groups[name] = _values(item, "member")
+                if _text(item, "exclude").lower() == "enable":
+                    config.excluded_address_groups.add(name)
 
     @staticmethod
     def _parse_services(roots: list[_Node], config: FirewallConfig) -> None:
