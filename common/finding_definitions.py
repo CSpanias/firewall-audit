@@ -3,12 +3,21 @@
 import re
 from importlib.resources import files
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
 from models.finding import FindingDefinition
 
-_REQUIRED_FIELDS = ("title", "category", "severity", "description", "impact", "recommendation")
+_REQUIRED_FIELDS = (
+    "title",
+    "category",
+    "severity",
+    "description",
+    "impact",
+    "recommendation",
+    "executive_summary",
+)
 _SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
 
@@ -42,6 +51,29 @@ def load_finding_definitions() -> dict[str, FindingDefinition]:
         ):
             raise ValueError(f"Finding '{finding_id}' has an invalid SureFormat ID.")
 
+        references = fields.get("references")
+        if not isinstance(references, list) or not references:
+            raise ValueError(f"Finding '{finding_id}' must have at least one reference.")
+        parsed_references = []
+        for reference in references:
+            if not isinstance(reference, dict):
+                raise ValueError(f"Finding '{finding_id}' has an invalid reference.")
+            title, url = reference.get("title"), reference.get("url")
+            if (
+                not isinstance(title, str)
+                or not title.strip()
+                or not isinstance(url, str)
+                or not re.fullmatch(r"https://[^\s<>\"'()\\]+", url)
+            ):
+                raise ValueError(f"Finding '{finding_id}' has an invalid reference title or URL.")
+            try:
+                valid_url = bool(urlsplit(url).hostname)
+            except ValueError:
+                valid_url = False
+            if not valid_url:
+                raise ValueError(f"Finding '{finding_id}' has an invalid reference URL.")
+            parsed_references.append((title, url))
+
         definitions[finding_id] = FindingDefinition(
             id=finding_id,
             title=fields["title"],
@@ -51,6 +83,8 @@ def load_finding_definitions() -> dict[str, FindingDefinition]:
             impact=fields["impact"],
             recommendation=fields["recommendation"],
             sureformat_id=sureformat_id,
+            executive_summary=fields["executive_summary"],
+            references=tuple(parsed_references),
         )
 
     return definitions

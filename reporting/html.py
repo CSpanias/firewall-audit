@@ -84,13 +84,20 @@ def render_html(report: dict[str, Any]) -> str:
         if value
     )
     inventory = report.get("inventory", {})
+
+    def card_value(key: str) -> str:
+        if key == "findings" and not report.get("checks_run", True):
+            return "Not assessed"
+        value = inventory.get(key)
+        return str(value) if value is not None else "Not parsed"
+
     cards = "\n".join(
         f'<div class="card"><span>{label}</span><strong>'
-        f"{escape(str(inventory.get(key) if inventory.get(key) is not None else 'Not parsed'))}</strong></div>"
+        f"{escape(card_value(key))}</strong></div>"
         for key, label in (
             ("interfaces", "Interfaces"),
             ("rules", "Policies"),
-            ("findings", "Review indicators"),
+            ("findings", "Findings"),
         )
     )
     return f"""<!doctype html>

@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -18,6 +19,7 @@ from models.rule import FirewallRule
 from parsers.fortigate import FortigateParser
 from reporting.findings import build_report, export_json
 from reporting.html import export_html, render_html
+from reporting.narrative import build_narratives
 from reporting.sureformat import export_sureformat
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -226,6 +228,12 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("Copy All Markdown", html)
         self.assertEqual(html.count(">Copy Markdown</button>"), 3)
         self.assertIn("Supporting evidence", html)
+        self.assertNotIn("validated before reporting", html)
+        self.assertIn(
+            "### Policy permits administrative services through a WAN-facing VIP\n",
+            report["technical_commentary"],
+        )
+        self.assertNotIn("WAN-facing VIP (High)", report["technical_commentary"])
         self.assertNotIn("never-include-this-secret", html)
         self.assertNotIn("never-include-this-secret", json_report)
         self.assertEqual(json.loads(json_report), report)
@@ -296,6 +304,18 @@ class FortiOSReportingTests(unittest.TestCase):
             path.suffix for path in self.directory.iterdir() if path.name.startswith("fortigate-")
         }
         self.assertEqual(suffixes, {".json", ".html"})
+
+    def test_cli_writes_to_default_output_directory(self) -> None:
+        arguments = build_parser().parse_args(["--config", str(self.config_path)])
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(self.directory)
+            run_audit_workflow(arguments)
+        finally:
+            os.chdir(previous_directory)
+
+        output = self.directory / "firewall-audit"
+        self.assertEqual({path.suffix for path in output.iterdir()}, {".json", ".html"})
 
     def test_cli_accepts_csacyber_and_writes_html_and_xml(self) -> None:
         output = io.StringIO()
@@ -368,6 +388,131 @@ class GenericFindingTests(unittest.TestCase):
         self.assertEqual(definition.severity, "high")
         self.assertEqual(definition.category, "access-control")
         self.assertIn("{rule_id}", definition.description)
+
+
+class ExecutiveSummaryTests(unittest.TestCase):
+    def test_prioritises_and_deduplicates_observations_with_business_impact(self) -> None:
+        report = {
+            "device": {"hostname": "edge-fw", "vendor": "Fortinet"},
+            "findings": [
+                {"id": "ntp-server-review", "severity": "medium"},
+                {"id": "broad-allow-rule", "severity": "high"},
+                {"id": "broad-allow-rule", "severity": "high"},
+            ],
+        }
+
+        summary = build_narratives(report)["executive_summary"]
+
+        self.assertIn("**edge-fw**", summary)
+        self.assertEqual(summary.count("Some permitted traffic"), 1)
+        self.assertLess(summary.index("Some permitted traffic"), summary.index("time source"))
+        self.assertIn("unintended connections", summary)
+        self.assertIn("harder to correlate", summary)
+        self.assertIn("prioritised for remediation", summary)
+        self.assertNotIn("The identified areas include", summary)
+
+    def test_no_findings_does_not_claim_the_firewall_is_secure(self) -> None:
+        summary = build_narratives({"findings": [], "parse_warnings": ["Limited scope"]})[
+            "executive_summary"
+        ]
+
+        self.assertIn("applicable automated checks did not identify findings", summary)
+        self.assertIn("does not establish that the firewall is secure", summary)
+        self.assertIn("scope and parsing limitations", summary)
+
+    def test_logging_observation_requires_an_enabled_destination(self) -> None:
+        report = {
+            "device": {"vendor": "Fortinet"},
+            "findings": [],
+            "logging": {"destinations": {"syslog": {"status": "disable", "server": "log"}}},
+        }
+        summary = build_narratives(report)["executive_summary"]
+        self.assertNotIn("Centralised logging destinations were configured", summary)
+
+        report["logging"]["destinations"]["syslog"]["status"] = "enable"
+        summary = build_narratives(report)["executive_summary"]
+        self.assertIn("Centralised logging destinations were configured", summary)
+        self.assertIn("Log delivery, coverage and retention were not verified", summary)
+
+    def test_inventory_only_does_not_claim_a_security_review(self) -> None:
+        summary = build_narratives(
+            {
+                "device": {"vendor": "WatchGuard"},
+                "checks_run": False,
+                "findings": [],
+            }
+        )["executive_summary"]
+
+        self.assertIn("not assessed using automated security checks", summary)
+        self.assertIn("separate configuration review is required", summary)
+        self.assertNotIn("did not identify findings", summary)
+        self.assertIn("Not assessed", render_html({"checks_run": False, "findings": []}))
+
+    def test_unrecognised_finding_uses_its_own_impact(self) -> None:
+        summary = build_narratives(
+            {
+                "findings": [
+                    {
+                        "id": "future-finding",
+                        "title": "Additional control weakness",
+                        "severity": "high",
+                        "impact": "This may affect access.",
+                    }
+                ]
+            }
+        )["executive_summary"]
+
+        self.assertIn(
+            "Additional control weakness was identified. This may affect access.", summary
+        )
+
+
+class RemediationGuidanceTests(unittest.TestCase):
+    def test_prioritises_bullets_and_deduplicates_relevant_references(self) -> None:
+        report = {
+            "findings": [
+                {
+                    "id": "policy-logging-gap",
+                    "severity": "low",
+                    "recommendation": "Enable policy logging.",
+                },
+                {
+                    "id": "broad-allow-rule",
+                    "severity": "high",
+                    "recommendation": "Restrict the policy.",
+                },
+                {
+                    "id": "broad-allow-rule",
+                    "severity": "high",
+                    "recommendation": "Restrict the policy.",
+                },
+                {
+                    "id": "logging-coverage-gap",
+                    "severity": "medium",
+                    "recommendation": "Configure central logging.",
+                },
+            ]
+        }
+
+        guidance = build_narratives(report)["remediation_guidance"]
+
+        self.assertEqual(guidance.count("- Restrict the policy."), 1)
+        self.assertLess(guidance.index("- Restrict"), guidance.index("- Configure"))
+        self.assertLess(guidance.index("- Configure"), guidance.index("- Enable"))
+        self.assertEqual(guidance.count("https://csrc.nist.gov/pubs/sp/800/92/final"), 1)
+        self.assertIn("https://csrc.nist.gov/pubs/sp/800/41/r1/final", guidance)
+        self.assertNotIn("https://www.rfc-editor.org/info/rfc8915", guidance)
+        html = render_html(report)
+        self.assertIn('<a href="https://csrc.nist.gov/pubs/sp/800/92/final">', html)
+        self.assertIn("<li>Restrict the policy.</li>", html)
+
+    def test_no_checks_does_not_claim_there_were_no_findings(self) -> None:
+        guidance = build_narratives({"checks_run": False, "findings": []})[
+            "remediation_guidance"
+        ]
+        self.assertIn("configuration review is required", guidance)
+        self.assertNotIn("absence of automated findings", guidance)
+        self.assertNotIn("### References", guidance)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-O",
         "--output-dir",
-        default="firewall-audit-output",
+        default="firewall-audit",
         metavar="DIR",
         help="Directory for generated reports.",
     )

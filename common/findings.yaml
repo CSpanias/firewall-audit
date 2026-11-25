@@ -10,9 +10,15 @@ findings:
     impact: >-
       An overly broad rule can permit unintended connections across network
       boundaries and increase opportunities for lateral movement.
+    executive_summary: >-
+      Some permitted traffic was not restricted by source or destination,
+      potentially allowing unintended connections and movement between networks.
     recommendation: >-
       Restrict the policy to documented source and destination networks and the
       minimum required services. Confirm the rule owner and business purpose.
+    references:
+      - title: "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy"
+        url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
   admin-services-on-wan:
     title: Firewall management services are enabled on a WAN interface
     category: control-plane
@@ -24,10 +30,17 @@ findings:
     impact: >-
       If reachable by untrusted sources, administrative interfaces may be
       exposed to credential attacks or vulnerabilities in management services.
+    executive_summary: >-
+      Firewall management services were enabled on interfaces identified as
+      WAN-facing. If accessible to untrusted sources, they could be targeted
+      to gain administrative control of the device.
     recommendation: >-
       Disable administrative services on public-facing interfaces where
       possible. Otherwise restrict management to dedicated, trusted source
       networks and verify reachability controls outside this configuration.
+    references:
+      - title: "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy"
+        url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
   admin-service-vip-policy:
     title: Policy permits administrative services through a WAN-facing VIP
     category: access-control
@@ -39,10 +52,17 @@ findings:
     impact: >-
       If reachable from untrusted networks, administrative services on the
       mapped systems may be exposed to credential attacks or exploitation.
+    executive_summary: >-
+      Policies permitted services commonly used for administration to systems
+      behind public or WAN-facing virtual addresses. If reachable by untrusted
+      sources, those systems could be exposed to credential attacks or exploitation.
     recommendation: >-
       Remove unnecessary administrative-service publishing. If required,
       restrict source networks, use a hardened management gateway, and verify
       the mapped host and service owner.
+    references:
+      - title: "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy"
+        url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
   legacy-service-policy:
     title: Policy references clear-text or legacy network services
     category: access-control
@@ -54,9 +74,18 @@ findings:
     impact: >-
       Clear-text services can expose credentials and traffic to interception;
       unrestricted services may permit protocols beyond those required.
+    executive_summary: >-
+      Some policies referenced legacy services or broadly defined services
+      that may permit them. Where clear-text protocols are used, credentials
+      and other information may be exposed to interception.
     recommendation: >-
       Replace legacy protocols with secure alternatives, disable unused
       services and helpers, and explicitly restrict or block insecure services.
+    references:
+      - title: "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy"
+        url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
+      - title: "NIST SP 800-52 Rev. 2: Guidelines for TLS Implementations"
+        url: https://csrc.nist.gov/pubs/sp/800/52/r2/final
   logging-coverage-gap:
     title: Remote logging is absent or not enabled
     category: logging
@@ -68,10 +97,16 @@ findings:
     impact: >-
       Missing centralized logs can reduce detection visibility and limit
       evidence available for incident investigation.
+    executive_summary: >-
+      No enabled central logging destination was identified, which may reduce
+      monitoring visibility and the evidence available for investigations.
     recommendation: >-
       Configure an approved centralized logging destination, enable the
       required event categories and policy logging, and validate ingestion,
       retention, access controls, and alerting.
+    references:
+      - title: "NIST SP 800-92: Guide to Computer Security Log Management"
+        url: https://csrc.nist.gov/pubs/sp/800/92/final
   policy-logging-gap:
     title: Some enabled policies explicitly disable traffic logging
     category: logging
@@ -82,9 +117,15 @@ findings:
       available.
     impact: >-
       Unlogged traffic can leave gaps in monitoring and incident investigation.
+    executive_summary: >-
+      Traffic logging was explicitly disabled on some permitted policies,
+      potentially leaving gaps in monitoring and incident investigations.
     recommendation: >-
       Enable policy logging where operationally appropriate and ensure
       exceptions are documented, monitored, and periodically reviewed.
+    references:
+      - title: "NIST SP 800-92: Guide to Computer Security Log Management"
+        url: https://csrc.nist.gov/pubs/sp/800/92/final
   local-admin-auth:
     title: Firewall administrators have no configured central AAA server
     category: administration
@@ -96,10 +137,17 @@ findings:
     impact: >-
       Reliance on local accounts can make consistent access control, account
       lifecycle management, and administrator auditing harder to enforce.
+    executive_summary: >-
+      No central authentication server was identified for the configured
+      administrators, which may make access management and auditing harder
+      to enforce consistently.
     recommendation: >-
       Where supported by operational requirements, use centrally managed
       administrator authentication with MFA. Review local accounts, trusted
       hosts, role assignments, and emergency-access procedures.
+    references:
+      - title: "NIST SP 800-63B-4: Authentication and Authenticator Management"
+        url: https://csrc.nist.gov/pubs/sp/800/63/b/4/final
   ntp-server-review:
     title: No explicit trusted NTP server is configured
     category: monitoring
@@ -111,6 +159,13 @@ findings:
     impact: >-
       Inaccurate or untrusted timestamps can hinder correlation of events and
       the investigation of security incidents.
+    executive_summary: >-
+      The configured time source could not be verified from an explicit server
+      entry. Inaccurate timestamps can make security events harder to correlate
+      and investigate.
     recommendation: >-
       Configure approved time sources, restrict NTP access to those sources,
       and verify synchronized time across the firewall and monitoring systems.
+    references:
+      - title: "RFC 8915: Network Time Security for the Network Time Protocol"
+        url: https://www.rfc-editor.org/info/rfc8915

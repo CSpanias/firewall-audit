@@ -24,6 +24,8 @@ class FindingDefinition:
     recommendation: str
     impact: str = ""
     sureformat_id: str | None = None
+    executive_summary: str = ""
+    references: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass

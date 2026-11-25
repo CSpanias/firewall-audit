@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 
 # Audit output
+firewall-audit/
 firewall-audit-output/
 site/
 

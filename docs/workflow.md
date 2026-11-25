@@ -17,15 +17,18 @@ reports. Progress, findings, and parsing limitations are shown in the terminal.
 
 ## Output files
 
-By default, output is written to `firewall-audit-output` in the current
+By default, output is written to `firewall-audit` in the current
 directory:
 
 * `<config>-<timestamp>.json`: structured assessment data.
 * `<config>-<timestamp>.html`: self-contained interactive report.
 
-The HTML report contains an executive summary, technical commentary with
-supporting evidence tables, and remediation guidance. Copy controls provide
-Markdown for each section or the whole report. It loads no remote assets.
+The HTML report contains an executive summary of the observed issues and their
+potential impact, technical commentary with supporting evidence tables, and
+prioritised remediation guidance with references relevant to the findings.
+The summary distinguishes an inventory-only input from a
+configuration review and notes the limits of static analysis. Copy controls
+provide Markdown for each section or the whole report. It loads no remote assets.
 
 The Firebox PDF parser extracts the policy summary table only. It does not
 parse source and destination addresses, service definitions, or detailed
