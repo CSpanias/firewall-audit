@@ -20,16 +20,14 @@ def _text(value: object) -> str:
     return re.sub(r"([\\`*_{}\[\]<>|])", r"\\\1", str(value)).replace("\n", " ")
 
 
-def _code(value: object, *, in_table: bool = False) -> str:
+def _code(value: object) -> str:
     if isinstance(value, list):
-        return ", ".join(_code(item, in_table=in_table) for item in value) or "None"
+        return ", ".join(_code(item) for item in value) or "None"
     if value is None or value == "":
         return "Not specified"
     if not isinstance(value, str):
         return _text(value)
     text = value.replace("\n", " ").replace("\r", " ")
-    if in_table:
-        text = text.replace("|", r"\|")
     runs = re.findall(r"`+", text)
     fence = "`" * (max((len(run) for run in runs), default=0) + 1)
     if text.startswith(("`", " ")) or text.endswith(("`", " ")):
@@ -37,24 +35,13 @@ def _code(value: object, *, in_table: bool = False) -> str:
     return f"{fence}{text}{fence}"
 
 
-def _table(
-    headers: list[str],
-    rows: list[list[object]],
-    *,
-    code_columns: set[int] | None = None,
-    code_cells: set[tuple[int, int]] | None = None,
-) -> str:
+def _table(headers: list[str], rows: list[list[object]]) -> str:
     lines = [
         "| " + " | ".join(headers) + " |",
         "| " + " | ".join("---" for _ in headers) + " |",
     ]
-    for row_index, row in enumerate(rows):
-        cells = [
-            _code(value, in_table=True)
-            if column in (code_columns or set()) or (row_index, column) in (code_cells or set())
-            else _text(value)
-            for column, value in enumerate(row)
-        ]
+    for row in rows:
+        cells = [_text(value) for value in row]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -68,7 +55,6 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                 [labels.get(key, key.replace("_", " ").title()), value]
                 for key, value in evidence["ntp"].items()
             ],
-            code_columns={1},
         )
     for key in ("rules", "interfaces"):
         entries = evidence.get(key)
@@ -95,10 +81,9 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                 return _table(
                     [label for _, label in columns],
                     [[item.get(name) for name, _ in columns] for item in entries],
-                    code_columns=set(range(len(columns))),
                 )
     rows = [[key.replace("_", " ").title(), value] for key, value in evidence.items()]
-    return _table(["Evidence", "Observed configuration"], rows, code_columns={1}) if rows else ""
+    return _table(["Evidence", "Observed configuration"], rows) if rows else ""
 
 
 def _prose_list(values: list[str]) -> str:
@@ -138,6 +123,16 @@ def _executive_summary(report: dict[str, Any]) -> str:
     )
     findings = report.get("findings", [])
     if findings:
+        summary[0] += (
+            " Although a centralised logging destination was configured, the assessment "
+            "highlighted areas requiring further review."
+            if logging_configured
+            else " The assessment highlighted areas requiring further review."
+        )
+        logging_observation = (
+            "The collection, coverage and retention of centralised logs "
+            "could not be independently verified."
+        )
         definitions = load_finding_definitions()
         ordered = sorted(
             findings,
@@ -156,24 +151,26 @@ def _executive_summary(report: dict[str, Any]) -> str:
                 logging_configured = False
             definition = definitions.get(finding_id)
             if definition:
-                text = _text(definition.executive_summary.strip())
-                if observations and finding_id in {"legacy-service-policy", "ntp-server-review"}:
-                    transition = (
-                        "Additionally, "
-                        if finding_id == "legacy-service-policy"
-                        else "In addition, "
-                    )
-                    text = transition + text[0].lower() + text[1:]
-                observations.append(text)
+                observations.append(_text(definition.executive_summary.strip()))
             else:
                 title = _text(finding.get("title") or "An additional security issue")
                 impact = _text(finding.get("impact")) if finding.get("impact") else ""
-                observations.append(f"{title} was identified." + (f" {impact}" if impact else ""))
+                observations.append(
+                    f"The following issue was identified: {title}."
+                    + (f" {impact}" if impact else "")
+                )
         if logging_configured:
             observations.append(logging_observation)
-        summary.append(
-            "The assessment highlighted areas requiring further review. " + " ".join(observations)
-        )
+        transitions = ("Additionally", "Furthermore", "Moreover", "In addition")
+        for index in range(1, len(observations)):
+            transition = (
+                "Finally"
+                if index == len(observations) - 1
+                else transitions[(index - 1) % len(transitions)]
+            )
+            text = observations[index]
+            observations[index] = f"{transition}, {text[0].lower()}{text[1:]}"
+        summary.append(" ".join(observations))
         improvements = []
         if seen & {"broad-allow-rule", "admin-service-vip-policy", "legacy-service-policy"}:
             improvements.append("strengthen access controls")
@@ -337,7 +334,6 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
                 ["Policies", inventory.get("rules", 0)],
                 ["Enabled policies", inventory.get("enabled_rules", 0)],
             ],
-            code_cells={(1, 1), (2, 1), (3, 1)},
         ),
     ]
     if report.get("parse_warnings"):
@@ -385,9 +381,7 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
             evidence_tables = [_evidence_table(entry.get("evidence") or {}) for entry in group]
         evidence_tables = [table for table in evidence_tables if table]
         if not evidence_tables and affected:
-            evidence_tables = [
-                _table(["Affected objects"], [[item] for item in affected], code_columns={0})
-            ]
+            evidence_tables = [_table(["Affected objects"], [[item] for item in affected])]
         if evidence_tables:
             introduction = (
                 "The table below provides further details of the observed configuration."

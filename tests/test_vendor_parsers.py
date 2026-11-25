@@ -101,7 +101,7 @@ class CiscoParserTests(unittest.TestCase):
         report = build_report(config, [], self.path.name)
         self.assertEqual(config.model, "Cisco Firepower 1010 Threat Defense")
         self.assertIn(
-            "| Model | `Cisco Firepower 1010 Threat Defense` |", report["technical_commentary"]
+            "| Model | Cisco Firepower 1010 Threat Defense |", report["technical_commentary"]
         )
         self.assertNotIn("`fw-example` (Cisco)", report["technical_commentary"])
 
@@ -133,7 +133,7 @@ Firewall Policies Details
             config = WatchGuardParser().parse("report.pdf")
         self.assertEqual(config.model, "Firebox Example")
         report = build_report(config, [], "report.pdf")
-        self.assertIn("| Model | `Firebox Example` |", report["technical_commentary"])
+        self.assertIn("| Model | Firebox Example |", report["technical_commentary"])
         self.assertEqual(
             [(r.id, r.name, r.enabled) for r in config.rules],
             [

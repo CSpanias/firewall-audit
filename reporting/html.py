@@ -30,11 +30,6 @@ class _SafeLinks(Treeprocessor):
                 element.attrib.clear()
             elif element.tag == "code" and element.text:
                 element.text = unescape(element.text)
-        for cell in root.iter():
-            if cell.tag in {"td", "th"}:
-                for code in cell.iter("code"):
-                    if code.text:
-                        code.text = code.text.replace(r"\|", "|")
 
 
 class _SafeLinksExtension(Extension):
@@ -54,9 +49,15 @@ def _safe_json(value: Any) -> str:
 
 
 def _render_markdown(text: str) -> str:
-    return markdown.markdown(
-        escape(text, quote=False), extensions=["tables", _SafeLinksExtension()]
+    escaped = escape(text, quote=False)
+    # Table cells already have HTML-escaped angle brackets at this point.
+    escaped = "\n".join(
+        line.replace(r"\&lt;", "&lt;").replace(r"\&gt;", "&gt;")
+        if line.startswith("| ")
+        else line
+        for line in escaped.split("\n")
     )
+    return markdown.markdown(escaped, extensions=["tables", _SafeLinksExtension()])
 
 
 def render_html(report: dict[str, Any]) -> str:
