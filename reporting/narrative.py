@@ -10,28 +10,33 @@ from common.text import number_as_words
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 _LEGACY_SERVICE_CONTEXT = (
-    ({"http"}, "HTTP: HTTP does not encrypt application traffic. Sensitive data may be "
+    ({"http"}, "**HTTP**: HTTP does not encrypt application traffic. Sensitive data may be "
      "intercepted or modified by someone with access to the traffic path; the business "
      "purpose and data exchanged should be verified."),
-    ({"syslog"}, "Syslog: Traditional Syslog over UDP or TCP is generally unencrypted, "
+    ({"syslog"}, "**Syslog**: Traditional Syslog over UDP or TCP is generally unencrypted, "
      "so log messages may be exposed or altered in transit. Syslog can also use TLS; "
      "the service name alone does not establish the transport or encryption in use."),
-    ({"samba", "netbios-ns", "netbios-ssn"}, "SMB and NetBIOS: These services may "
-     "expose file-sharing or name-service traffic. Confirm the protocols and versions in "
-     "use and whether appropriate authentication, signing and encryption are enforced."),
-    ({"all"}, "ALL: A broad service definition may permit more protocols than needed "
+    ({"samba"}, "**SAMBA**: Samba is software that provides SMB/CIFS file-sharing services; "
+     "SMB may use NetBIOS for name resolution or transport. The service definition name "
+     "does not establish which protocols or versions are in use. Inadequately protected "
+     "file sharing may expose sensitive files or permit unauthorised access. Verify the "
+     "business need and whether authentication, signing, and encryption are appropriate."),
+    ({"netbios-ns", "netbios-ssn"}, "**NetBIOS**: NetBIOS services may expose host or "
+     "network information and can support file sharing. Confirm their use and restrict "
+     "access to the systems that require them."),
+    ({"all"}, "**`ALL`**: A broad service definition may permit more protocols than needed "
      "between the specified endpoints. It does not establish which protocols are in use; "
      "review the business requirement and restrict the permitted services where feasible."),
-    ({"ftp", "ftp-get", "ftp-put"}, "FTP: Traditional FTP can transmit credentials "
+    ({"ftp", "ftp-get", "ftp-put"}, "**FTP**: Traditional FTP can transmit credentials "
      "and data without encryption. Confirm the protocol and whether a secure alternative "
      "or other protection is used."),
-    ({"telnet", "rsh", "rlogin"}, "Telnet, RSH and Rlogin: These legacy remote-access "
+    ({"telnet", "rsh", "rlogin"}, "**Telnet, RSH, and Rlogin**: These legacy remote-access "
      "protocols can expose credentials or commands in transit. Confirm whether they are "
      "used and replace them with secured alternatives where feasible."),
-    ({"snmp", "snmptrap"}, "SNMP: Earlier SNMP versions do not provide encryption "
+    ({"snmp", "snmptrap"}, "**SNMP**: Earlier SNMP versions do not provide encryption "
      "and may expose management information or community strings. Verify the version "
      "and security settings; SNMPv3 supports authentication and encryption."),
-    ({"tftp"}, "TFTP: TFTP does not provide built-in authentication or encryption, "
+    ({"tftp"}, "**TFTP**: TFTP does not provide built-in authentication or encryption, "
      "so transferred data may be exposed or modified. Confirm its use and protect or "
      "replace it where appropriate."),
 )
@@ -90,6 +95,14 @@ def _interface_path(entry: dict[str, Any]) -> str:
     return f"{label(entry.get('source_interfaces'))} → {label(entry.get('destination_interfaces'))}"
 
 
+def _port_mapping(value: object) -> object:
+    if isinstance(value, list):
+        return [_port_mapping(item) for item in value]
+    if isinstance(value, str) and not value.lower().endswith("no explicit port forwarding"):
+        return " → ".join(value.rsplit(" -> ", 1))
+    return value
+
+
 def _evidence_table(evidence: dict[str, Any]) -> str:
     if len(evidence) == 1 and isinstance(evidence.get("ntp"), dict):
         labels = {"ntpsync": "NTP synchronisation", "syncinterval": "Sync interval"}
@@ -122,7 +135,7 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                             destination += f" (via {', '.join(groups)})"
                         rows.append([
                             item.get("id"), _address_value(item, "source"), destination,
-                            vip["services"], vip["port_mapping"],
+                            vip["services"], _port_mapping(vip["port_mapping"]),
                         ])
                 return _table(["Rule", "Source", "Destination", "Services", "Port mapping"], rows)
             has_interfaces = any(
@@ -157,6 +170,8 @@ def _evidence_table(evidence: dict[str, Any]) -> str:
                         return _address_value(item, name.removesuffix("_addresses"))
                     if name == "interface_path":
                         return _interface_path(item)
+                    if name == "vip_port_mapping":
+                        return _port_mapping(item.get(name))
                     return item.get(name)
 
                 return _table(
@@ -219,9 +234,14 @@ def _temporary_access_evidence(evidence: dict[str, Any]) -> str:
     return table + ("\n\n" + "\n\n".join(details) if details else "")
 
 
+def _join_prose(items: list[str]) -> str:
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + (", and " if len(items) > 2 else " and ") + items[-1]
+
+
 def _prose_list(values: list[str]) -> str:
-    items = [_code(value) for value in values]
-    return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else items[0]
+    return _join_prose([_code(value) for value in values])
 
 
 def _executive_summary(report: dict[str, Any]) -> str:
@@ -242,9 +262,9 @@ def _executive_summary(report: dict[str, Any]) -> str:
     summary = [
         f"A firewall configuration review was performed against {hostname} "
         "to identify settings that could increase exposure to unauthorised access, "
-        "weaken network segmentation or reduce the effectiveness of security controls. "
+        "weaken network segmentation, or reduce the effectiveness of security controls. "
         "This review was limited to a static assessment of the firewall configuration. "
-        "Reachability of exposed services, operational effectiveness of controls and "
+        "Reachability of exposed services, operational effectiveness of controls, and "
         "the business justification for individual rules were not independently validated."
         + (
             " The scope and parsing limitations are described in the technical commentary."
@@ -258,7 +278,7 @@ def _executive_summary(report: dict[str, Any]) -> str:
         for fields in destinations.values()
     )
     logging_observation = (
-        "While centralised logging destinations were configured, log collection, coverage "
+        "While centralised logging destinations were configured, log collection, coverage, "
         "and retention could not be independently verified."
     )
     ntp = report.get("monitoring", {}).get("ntp", {})
@@ -267,18 +287,12 @@ def _executive_summary(report: dict[str, Any]) -> str:
         and str(ntp.get("ntpsync", "")).lower() == "enable"
         and bool(ntp.get("servers"))
     )
-    positive_observations = int(logging_configured) + int(time_source_configured)
     findings = report.get("findings", [])
     if findings:
-        if positive_observations:
-            subject = (
-                "a positive observation was"
-                if positive_observations == 1
-                else "a number of positive observations were"
-            )
+        if logging_configured or time_source_configured:
             summary[0] += (
-                f" Although {subject} identified, the assessment highlighted areas "
-                "requiring further review."
+                " Although some positive observations were identified, the assessment "
+                "highlighted areas requiring further review."
             )
         else:
             summary[0] += " The assessment highlighted areas requiring further review."
@@ -332,13 +346,10 @@ def _executive_summary(report: dict[str, Any]) -> str:
             improvements.append("improve administrative security")
         if seen & {"logging-coverage-gap", "policy-logging-gap", "ntp-server-review"}:
             improvements.append("enhance monitoring assurance")
-        if len(improvements) > 1:
-            areas = ", ".join(improvements[:-1]) + " and " + improvements[-1]
-        else:
-            areas = improvements[0] if improvements else "strengthen firewall security"
+        areas = _join_prose(improvements) if improvements else "strengthen firewall security"
         summary.append(
             f"Overall, the review identified opportunities to {areas}. Remediation activities "
-            "should be prioritised according to exposure, business requirements and the "
+            "should be prioritised according to exposure, business requirements, and the "
             "potential impact of the affected services. Following implementation, the affected "
             "controls should be reassessed to confirm that the intended restrictions and "
             "monitoring capabilities are operating as expected."
@@ -385,8 +396,8 @@ def _commentary_observation(finding_id: str, findings: list[dict[str, Any]], ven
             f"{subject} referenced public or WAN-facing virtual IPs and "
             "service definitions"
             + (f" including {_prose_list(services)}." if services else ".")
-            + " The configurations may permit SSH, Telnet or RDP access. "
-            "Source restrictions, the mapped service and reachability require verification."
+            + " The configurations may permit SSH, Telnet, or RDP access. "
+            "Source restrictions, the mapped service, and reachability require verification."
         )
     if finding_id == "legacy-service-policy" and count:
         return f"{subject} referenced legacy or broadly defined service definitions" + (
@@ -420,7 +431,7 @@ def _commentary_observation(finding_id: str, findings: list[dict[str, Any]], ven
             accounts = "Administrator accounts were identified"
         if evidence[0].get("central_authentication_servers") == 0:
             observation = (
-                "no RADIUS, LDAP or TACACS+ server was identified in the parsed configuration"
+                "no RADIUS, LDAP, or TACACS+ server was identified in the parsed configuration"
             )
         else:
             observation = (
@@ -514,7 +525,7 @@ def _management_service_context(finding_id: str, findings: list[dict[str, Any]])
                 for vip in forwarded_vips for service in vip.get("services", [])
             ):
                 context += (
-                    " An ALL policy service does not override the VIP's configured port "
+                    " An `ALL` policy service does not override the VIP's configured port "
                     "forwarding for traffic to that VIP; other access paths require review."
                 )
             return context
@@ -543,9 +554,9 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
         introduction = (
             f"A firewall configuration review was performed against {hostname} "
             "to identify settings that could increase exposure to "
-            "unauthorised access, weaken network segmentation or reduce the effectiveness "
+            "unauthorised access, weaken network segmentation, or reduce the effectiveness "
             "of security controls. The review considered firewall policies, administrative "
-            "access controls, logging configuration and supporting infrastructure services."
+            "access controls, logging configuration, and supporting infrastructure services."
         )
     else:
         introduction = (
@@ -561,7 +572,6 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     commentary = [
         introduction,
         "The table below summarises the available characteristics of the reviewed configuration.",
-        "### Configuration overview",
         _table(
             ["Property", "Observed value"],
             [
@@ -581,7 +591,7 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
         for address in context["addresses"]:
             names = context.get("host_objects", {}).get(address, [])
             hosts.append(f"{_prose_list(names)} ({_code(address)})" if names else _code(address))
-        host_list = ", ".join(hosts[:-1]) + " and " + hosts[-1] if len(hosts) > 1 else hosts[0]
+        host_list = _join_prose(hosts)
         host_noun = "host was" if len(hosts) == 1 else "hosts were"
         note = f"**Note:** The {host_list} {host_noun} used for testing"
         if not report.get("checks_run", True) or not context["addresses_available"]:
@@ -679,7 +689,7 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     if recommendations:
         remediation = [
             "The following actions should be prioritised according to exposure, "
-            "business requirements and the severity of the identified issues:",
+            "business requirements, and the severity of the identified issues:",
             "\n".join(recommendations),
             "Test changes before deployment, document any approved exceptions, and "
             "reassess the affected controls to confirm that the changes are effective.",

@@ -366,7 +366,7 @@ class FortiOSReportingTests(unittest.TestCase):
             "technical_commentary"
         ]
         self.assertIn("Other authentication mechanisms were not assessed", commentary)
-        self.assertNotIn("no RADIUS, LDAP or TACACS+ server", commentary)
+        self.assertNotIn("no RADIUS, LDAP, or TACACS+ server", commentary)
 
     def test_admin_vip_checks_mapped_ports_and_preserves_source_context(self) -> None:
         config = deepcopy(self.config)
@@ -414,14 +414,14 @@ class FortiOSReportingTests(unittest.TestCase):
         commentary = build_report(config, findings, "firewall.conf")["technical_commentary"]
         self.assertIn("| Rule | Source | Destination | Services | Port mapping |", commentary)
         self.assertIn(
-            r"| ssh | Except: admins | ssh-vip (via management-vips) | ALL | 2222 -\> 22 |",
+            "| ssh | Except: admins | ssh-vip (via management-vips) | ALL | 2222 → 22 |",
             commentary,
         )
         self.assertIn(
-            r"| ssh | Except: admins | ssh-vip-2 (via management-vips) | ALL | 2022 -\> 22 |",
+            "| ssh | Except: admins | ssh-vip-2 (via management-vips) | ALL | 2022 → 22 |",
             commentary,
         )
-        self.assertIn(r"| web-ssh | all | ssh-over-web-port | HTTPS | 443 -\> 22 |", commentary)
+        self.assertIn("| web-ssh | all | ssh-over-web-port | HTTPS | 443 → 22 |", commentary)
         self.assertNotIn("Source negated", commentary)
         legacy = next(item for item in findings if item.id == "legacy-service-policy")
         self.assertNotIn("Policy web", legacy.affected_objects)
@@ -495,7 +495,7 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("Copy All Markdown", html)
         self.assertEqual(html.count(">Copy Markdown</button>"), 3)
         self.assertIn("The table below provides further details", html)
-        self.assertNotIn("<strong>", html)
+        self.assertIn("<strong><code>ALL</code></strong>:", html)
         self.assertNotIn("validated before reporting", html)
         self.assertNotIn(
             "### Potential Administrative Access via Virtual IPs", report["technical_commentary"]
@@ -543,7 +543,7 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertEqual(markdown["executive_summary"], report["executive_summary"])
         self.assertEqual(markdown["technical_commentary"], report["technical_commentary"])
         self.assertEqual(markdown["remediation_guidance"], report["remediation_guidance"])
-        self.assertNotIn("**", markdown["all"])
+        self.assertIn("**`ALL`**:", markdown["all"])
         self.assertIn("| Rule |", markdown["technical_commentary"])
         self.assertIn("| 2 |", markdown["technical_commentary"])
         self.assertNotIn("Affected policies:", markdown["technical_commentary"])
@@ -1094,7 +1094,7 @@ class ExecutiveSummaryTests(unittest.TestCase):
         report["logging"]["destinations"]["syslog"]["status"] = "enable"
         summary = build_narratives(report)["executive_summary"]
         self.assertIn("centralised logging destinations were configured", summary)
-        self.assertIn("log collection, coverage and retention could not be independently", summary)
+        self.assertIn("log collection, coverage, and retention could not be independently", summary)
 
     def test_summary_flows_from_findings_to_logging_and_time(self) -> None:
         report = {
@@ -1111,7 +1111,7 @@ class ExecutiveSummaryTests(unittest.TestCase):
         paragraphs = build_narratives(report)["executive_summary"].split("\n\n")
 
         self.assertEqual(len(paragraphs), 3)
-        self.assertIn("Although a positive observation was identified", paragraphs[0])
+        self.assertIn("Although some positive observations were identified", paragraphs[0])
         self.assertNotIn("logging", paragraphs[0])
         self.assertIn("assessment highlighted areas requiring further review", paragraphs[0])
         self.assertLess(paragraphs[0].index("static assessment"), paragraphs[0].index("Although"))
@@ -1133,6 +1133,11 @@ class ExecutiveSummaryTests(unittest.TestCase):
         self.assertIn("strengthen access controls", paragraphs[2])
         self.assertIn("improve administrative security", paragraphs[2])
         self.assertIn("enhance monitoring assurance", paragraphs[2])
+        self.assertIn(
+            "strengthen access controls, improve administrative security, and "
+            "enhance monitoring assurance",
+            paragraphs[2],
+        )
         self.assertIn("static assessment", paragraphs[0])
 
     def test_one_observation_has_no_final_transition_or_unsupported_positive_claim(self) -> None:
@@ -1154,7 +1159,7 @@ class ExecutiveSummaryTests(unittest.TestCase):
         }
 
         introduction = build_narratives(report)["executive_summary"].split("\n\n")[0]
-        self.assertIn("Although a number of positive observations were identified", introduction)
+        self.assertIn("Although some positive observations were identified", introduction)
         self.assertNotIn("logging", introduction)
         self.assertNotIn("192.0.2.1", introduction)
 
@@ -1262,6 +1267,42 @@ class RemediationGuidanceTests(unittest.TestCase):
 
 
 class TechnicalCommentaryTests(unittest.TestCase):
+    def test_service_lists_use_oxford_commas_only_for_three_or_more_items(self) -> None:
+        for services, expected in (
+            (["HTTP"], "including `HTTP`."),
+            (["HTTP", "ALL"], "including `HTTP` and `ALL`."),
+            (["HTTP", "ALL", "SYSLOG"], "including `HTTP`, `ALL`, and `SYSLOG`."),
+        ):
+            with self.subTest(services=services):
+                report = {"findings": [{
+                    "id": "legacy-service-policy",
+                    "affected_objects": ["Policy 1"],
+                    "evidence": {"rules": [{"id": "1", "services": services}]},
+                }]}
+                self.assertIn(expected, build_narratives(report)["technical_commentary"])
+
+    def test_admin_vip_explanation_uses_oxford_commas(self) -> None:
+        report = {"findings": [{
+            "id": "admin-service-vip-policy",
+            "affected_objects": ["Policy 1"],
+            "evidence": {"rules": [{"id": "1", "services": ["ALL", "RDP"]}]},
+        }]}
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("including `ALL` and `RDP`", commentary)
+        self.assertIn("SSH, Telnet, or RDP access", commentary)
+        self.assertIn("Source restrictions, the mapped service, and reachability", commentary)
+
+    def test_existing_vip_mapping_evidence_renders_arrows_without_mutation(self) -> None:
+        mappings = ["admin: 2222 -> 22", "other: no explicit port forwarding"]
+        report = {"findings": [{
+            "id": "admin-service-vip-policy",
+            "affected_objects": ["Policy 1"],
+            "evidence": {"rules": [{"id": "1", "vip_port_mapping": mappings}]},
+        }]}
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("admin: 2222 → 22, other: no explicit port forwarding", commentary)
+        self.assertEqual(mappings[0], "admin: 2222 -> 22")
+
     def test_temporary_access_table_retains_details_outside_the_table(self) -> None:
         report = {"findings": [{
             "id": "temporary-access-review",
@@ -1310,13 +1351,15 @@ class TechnicalCommentaryTests(unittest.TestCase):
             }],
         }
         commentary = build_narratives(report)["technical_commentary"]
-        self.assertIn("HTTP: HTTP does not encrypt", commentary)
-        self.assertIn("Syslog: Traditional Syslog", commentary)
+        self.assertIn("**HTTP**: HTTP does not encrypt", commentary)
+        self.assertIn("**Syslog**: Traditional Syslog", commentary)
         self.assertIn("Syslog can also use TLS", commentary)
-        self.assertIn("SMB and NetBIOS:", commentary)
-        self.assertIn("ALL: A broad service definition", commentary)
-        self.assertNotIn("FTP:", commentary)
-        self.assertNotIn("SNMP:", commentary)
+        self.assertIn("**SAMBA**: Samba is software that provides SMB/CIFS", commentary)
+        self.assertIn("SMB may use NetBIOS", commentary)
+        self.assertIn("**`ALL`**: A broad service definition", commentary)
+        self.assertNotIn("**NetBIOS**:", commentary)
+        self.assertNotIn("**FTP**:", commentary)
+        self.assertNotIn("**SNMP**:", commentary)
 
     def test_custom_service_does_not_claim_a_specific_protocol(self) -> None:
         report = {"findings": [{
@@ -1326,8 +1369,18 @@ class TechnicalCommentaryTests(unittest.TestCase):
         }]}
         commentary = build_narratives(report)["technical_commentary"]
         self.assertIn("Clear-text traffic may be intercepted", commentary)
-        self.assertNotIn("HTTP:", commentary)
-        self.assertNotIn("Syslog:", commentary)
+        self.assertNotIn("**HTTP**:", commentary)
+        self.assertNotIn("**Syslog**:", commentary)
+
+    def test_netbios_only_does_not_claim_samba_was_referenced(self) -> None:
+        report = {"findings": [{
+            "id": "legacy-service-policy",
+            "affected_objects": ["Policy 1"],
+            "evidence": {"rules": [{"id": "1", "services": ["NETBIOS-NS"]}]},
+        }]}
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("**NetBIOS**:", commentary)
+        self.assertNotIn("**SAMBA**:", commentary)
 
     def test_detected_service_definitions_receive_explanations_in_report(self) -> None:
         config = FirewallConfig(
@@ -1345,7 +1398,7 @@ class TechnicalCommentaryTests(unittest.TestCase):
         )
         report = build_report(config, run_fortigate_checks(config), "firewall.conf")
         commentary = report["technical_commentary"]
-        for explanation in ("HTTP:", "Syslog:", "SMB and NetBIOS:", "ALL:"):
+        for explanation in ("**HTTP**:", "**Syslog**:", "**SAMBA**:", "**`ALL`**:"):
             self.assertIn(explanation, commentary)
 
     def test_findings_explain_limits_and_controls_relevant_to_their_evidence(self) -> None:
@@ -1399,7 +1452,7 @@ class TechnicalCommentaryTests(unittest.TestCase):
         commentary = build_narratives(report)["technical_commentary"]
         self.assertIn("Management access includes `http`", commentary)
         self.assertIn("the VIP maps an external port", commentary)
-        self.assertIn("An ALL policy service does not override", commentary)
+        self.assertIn("An `ALL` policy service does not override", commentary)
         report["findings"][0]["evidence"]["interfaces"][0]["services"] = ["HTTPS"]
         report["findings"][1]["evidence"]["rules"][0]["vip_details"][0]["port_mapping"] = (
             "No explicit port forwarding"
@@ -1546,6 +1599,9 @@ class TechnicalCommentaryTests(unittest.TestCase):
         self.assertNotIn("administrative access controls", cisco)
         self.assertIn("not assessed using automated security checks", inventory)
         self.assertNotIn("firewall configuration review was performed", inventory)
+        for commentary in (cisco, inventory):
+            self.assertNotIn("### Configuration overview", commentary)
+            self.assertIn("| Property | Observed value |", commentary)
 
     def test_single_cisco_rule_does_not_claim_clear_text_is_in_use(self) -> None:
         report = {

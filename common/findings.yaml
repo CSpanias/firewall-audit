@@ -15,10 +15,10 @@ findings:
     commentary_impact: >-
       Policies without source or destination restrictions can allow connections
       beyond those required for the intended purpose. Depending on the interfaces,
-      services and other controls involved, this may weaken network segmentation
+      services, and other controls involved, this may weaken network segmentation
       and increase opportunities for lateral movement. Unrestricted addresses do
       not necessarily mean all services are permitted or that traffic is reachable;
-      review the service, interfaces, rule order and other controls.
+      review the service, interfaces, rule order, and other controls.
     executive_summary: >-
       Some firewall policies permitted traffic without source or destination
       restrictions, potentially allowing unintended connections and movement
@@ -46,7 +46,7 @@ findings:
       through credential attacks or vulnerabilities in the management interface.
       Interface configuration alone does not establish whether these services are
       reachable or whether other controls restrict access. These services manage
-      the firewall itself; verify trusted-host restrictions, local-in policies and
+      the firewall itself; verify trusted-host restrictions, local-in policies, and
       upstream controls before assessing the exposure.
     executive_summary: >-
       Firewall management services were enabled on interfaces identified as
@@ -66,8 +66,8 @@ findings:
     severity: high
     description: >-
       Enabled policy {rule_ids} references {services} and a public or
-      WAN-facing virtual IP that may permit SSH, Telnet or RDP access.
-      Confirm the mapped service, source restrictions and business requirement.
+      WAN-facing virtual IP that may permit SSH, Telnet, or RDP access.
+      Confirm the mapped service, source restrictions, and business requirement.
     impact: >-
       If reachable from untrusted networks, administrative services on the
       mapped systems may be exposed to credential attacks or exploitation.
@@ -84,7 +84,7 @@ findings:
       from untrusted networks, these services may increase exposure to credential
       attacks or exploitation of vulnerable systems.
     recommendation: >-
-      Confirm the mapped service, owner, source address group and upstream
+      Confirm the mapped service, owner, source address group, and upstream
       reachability. Remove unnecessary administrative access; where required,
       restrict sources and use an appropriately secured management gateway.
     references:
@@ -188,14 +188,14 @@ findings:
       lifecycle management, and administrator auditing harder to enforce.
     commentary_impact: >-
       Centralised authentication can support consistent account lifecycle
-      management, accountability and auditing. Reliance on locally managed
+      management, accountability, and auditing. Reliance on locally managed
       accounts may make these controls more difficult to enforce consistently.
       Local emergency accounts may still be appropriate; verify administrator
-      authentication, access restrictions and emergency-access procedures.
+      authentication, access restrictions, and emergency-access procedures.
     executive_summary: >-
       Centralised authentication for firewall administrators could not be
       confirmed from the reviewed settings, which may make access management,
-      accountability and auditing more difficult to enforce consistently.
+      accountability, and auditing more difficult to enforce consistently.
     recommendation: >-
       Where supported by operational requirements, use centrally managed
       administrator authentication with MFA. Review local accounts, trusted
@@ -216,7 +216,7 @@ findings:
       the investigation of security incidents.
     commentary_impact: >-
       Accurate and trusted timestamps support security monitoring, event
-      correlation and investigations. Where synchronisation is disabled or
+      correlation, and investigations. Where synchronisation is disabled or
       the time source cannot be verified, firewall logs may not align with
       the wider monitoring infrastructure. An absent explicit server entry does
       not by itself prove that no time source is in use; vendor defaults or other
@@ -247,7 +247,7 @@ findings:
     commentary_impact: >-
       Temporary access that remains in place beyond its intended use may permit
       unnecessary connections. The configuration alone does not establish when
-      the access was approved, whether it has expired or whether it remains
+      the access was approved, whether it has expired, or whether it remains
       required. Testing-related names or host references are indicators for review,
       not proof that the rule is dedicated to testing or should be removed.
     executive_summary: >-
@@ -255,7 +255,7 @@ findings:
       suggesting temporary or testing-related access. Their intended duration
       and continued business need could not be established from the configuration.
     recommendation: >-
-      Confirm the owner, purpose and approved duration of the affected access
+      Confirm the owner, purpose, and approved duration of the affected access
       with the firewall owner. Remove access that is no longer required and
       document or time-limit any access that must remain.
     references:

@@ -371,7 +371,7 @@ def run_fortigate_checks(
     ):
         definition = definitions["local-admin-auth"]
         auth_observation = (
-            "No configured RADIUS, LDAP or TACACS+ server was identified."
+            "No configured RADIUS, LDAP, or TACACS+ server was identified."
             if not config.aaa_servers
             else "No administrator account was explicitly configured for remote authentication."
         )
