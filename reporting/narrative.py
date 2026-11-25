@@ -24,7 +24,7 @@ _LEGACY_SERVICE_CONTEXT = (
     ({"netbios-ns", "netbios-ssn"}, "**NetBIOS**: NetBIOS services may expose host or "
      "network information and can support file sharing. Confirm their use and restrict "
      "access to the systems that require them."),
-    ({"all"}, "**`ALL`**: A broad service definition may permit more protocols than needed "
+    ({"all"}, "**ALL**: A broad service definition may permit more protocols than needed "
      "between the specified endpoints. It does not establish which protocols are in use; "
      "review the business requirement and restrict the permitted services where feasible."),
     ({"ftp", "ftp-get", "ftp-put"}, "**FTP**: Traditional FTP can transmit credentials "
@@ -65,6 +65,24 @@ def _code(value: object) -> str:
     if text.startswith(("`", " ")) or text.endswith(("`", " ")):
         text = f" {text} "
     return f"{fence}{text}{fence}"
+
+
+def format_review_indicators(indicators: list[str]) -> str:
+    formatted = []
+    name_values = {
+        indicator.removeprefix("Rule name contains: ").casefold()
+        for indicator in indicators
+        if indicator.startswith("Rule name contains: ")
+    }
+    for indicator in indicators:
+        prefix, separator, value = indicator.partition(": ")
+        if separator and prefix in {"Rule name contains", "Rule comment contains"} and value:
+            if prefix == "Rule comment contains" and value.casefold() in name_values:
+                continue
+            formatted.append(f"{prefix} {_code(value)}")
+        else:
+            formatted.append(_text(indicator))
+    return ", ".join(formatted)
 
 
 def _table(headers: list[str], rows: list[list[object]]) -> str:
@@ -229,7 +247,15 @@ def _temporary_access_evidence(evidence: dict[str, Any]) -> str:
         if fields:
             details.append(
                 f"Rule {_text(rule.get('id'))}:\n\n"
-                + "\n".join(f"- {label}: {_text(value)}" for label, value in fields)
+                + "\n".join(
+                    f"- {label}: "
+                    + (
+                        format_review_indicators(value)
+                        if label == "Review indicators" and isinstance(value, list)
+                        else _text(value)
+                    )
+                    for label, value in fields
+                )
             )
     return table + ("\n\n" + "\n\n".join(details) if details else "")
 

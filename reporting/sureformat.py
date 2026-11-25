@@ -6,6 +6,7 @@ from typing import Any
 
 from analysis.services import service_matches
 from models.firewall import FirewallConfig
+from reporting.narrative import format_review_indicators
 
 
 def export_sureformat(report: dict[str, Any], filepath: Path) -> tuple[Path, int, int]:
@@ -112,7 +113,7 @@ def export_sureformat(report: dict[str, Any], filepath: Path) -> tuple[Path, int
         if finding.get("id") == "temporary-access-review":
             indicators = [
                 f"{rule.get('rule_type', 'Rule')} {rule['id']}: "
-                + ", ".join(rule.get("indicators", []))
+                + format_review_indicators(rule["indicators"])
                 for rule in (finding.get("evidence") or {}).get("rules", [])
                 if isinstance(rule, dict) and rule.get("indicators")
             ]

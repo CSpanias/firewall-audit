@@ -495,7 +495,7 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("Copy All Markdown", html)
         self.assertEqual(html.count(">Copy Markdown</button>"), 3)
         self.assertIn("The table below provides further details", html)
-        self.assertIn("<strong><code>ALL</code></strong>:", html)
+        self.assertIn("<strong>ALL</strong>:", html)
         self.assertNotIn("validated before reporting", html)
         self.assertNotIn(
             "### Potential Administrative Access via Virtual IPs", report["technical_commentary"]
@@ -543,7 +543,7 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertEqual(markdown["executive_summary"], report["executive_summary"])
         self.assertEqual(markdown["technical_commentary"], report["technical_commentary"])
         self.assertEqual(markdown["remediation_guidance"], report["remediation_guidance"])
-        self.assertIn("**`ALL`**:", markdown["all"])
+        self.assertIn("**ALL**:", markdown["all"])
         self.assertIn("| Rule |", markdown["technical_commentary"])
         self.assertIn("| 2 |", markdown["technical_commentary"])
         self.assertNotIn("Affected policies:", markdown["technical_commentary"])
@@ -606,7 +606,8 @@ class FortiOSReportingTests(unittest.TestCase):
                 FirewallRule(id="3", source_addresses=["admins"], destination_addresses=["server"],
                              services=["broad"], action="accept"),
                 FirewallRule(id="4", name="TEMP access", services=["HTTPS"], action="accept"),
-                FirewallRule(id="5", name="Test network", services=["HTTPS"], action="accept"),
+                FirewallRule(id="5", name="Test network", comments="test environment",
+                             services=["HTTPS"], action="accept"),
                 FirewallRule(id="6", source_addresses=["192.0.2.1", "192.0.2.2"],
                              services=["HTTPS"], action="accept"),
                 FirewallRule(id="7", name="TEMP disabled", services=["HTTPS"],
@@ -629,8 +630,9 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("business requirement and actual traffic have not been established",
                       mapped["SC-1831"])
         self.assertIn("Affected: Policy 4, Policy 5, Policy 6", mapped["SC-3398"])
-        self.assertIn("Rule name contains: TEMP", mapped["SC-3398"])
-        self.assertIn("Rule name contains: Test", mapped["SC-3398"])
+        self.assertIn("Rule name contains `TEMP`", mapped["SC-3398"])
+        self.assertIn("Rule name contains `Test`", mapped["SC-3398"])
+        self.assertNotIn("Rule comment contains `test`", mapped["SC-3398"])
         self.assertIn("Explicit assessment host: 192.0.2.1", mapped["SC-3398"])
         self.assertNotIn("Policy 7", mapped["SC-3398"])
         self.assertIn("intended duration and continued need could not be established",
@@ -1372,7 +1374,11 @@ class TechnicalCommentaryTests(unittest.TestCase):
                 "destination_addresses": ["server"],
                 "services": ["RDP"],
                 "schedule": "always",
-                "indicators": ["Rule name contains: TEMP"],
+                "indicators": [
+                    "Rule name contains: TEMP",
+                    "Rule comment contains: Test",
+                    "Explicit assessment host: 192.0.2.1",
+                ],
                 "source_address_scopes": ["Admin group: 192.0.2.1"],
                 "unresolved_source_references": ["Admin group: unknown|host"],
             }]},
@@ -1387,9 +1393,25 @@ class TechnicalCommentaryTests(unittest.TestCase):
         self.assertIn("Rule 37:", commentary)
         self.assertIn("- Rule type: Firewall policy", commentary)
         self.assertIn("- Schedule: always", commentary)
-        self.assertIn("- Review indicators: Rule name contains: TEMP", commentary)
+        self.assertIn(
+            "- Review indicators: Rule name contains `TEMP`, Rule comment contains `Test`, "
+            "Explicit assessment host: 192.0.2.1",
+            commentary,
+        )
         self.assertIn("- Resolved source scopes: Admin group: 192.0.2.1", commentary)
         self.assertIn(r"- Unresolved source references: Admin group: unknown\|host", commentary)
+
+    def test_duplicate_name_and_comment_indicators_are_shown_once(self) -> None:
+        report = {"findings": [{
+            "id": "temporary-access-review",
+            "evidence": {"rules": [{
+                "id": "1",
+                "indicators": ["Rule name contains: Test", "Rule comment contains: test"],
+            }]},
+        }]}
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("- Review indicators: Rule name contains `Test`", commentary)
+        self.assertNotIn("Rule comment contains", commentary)
 
     def test_service_context_follows_flagged_services_and_nested_groups(self) -> None:
         report = {
@@ -1412,7 +1434,7 @@ class TechnicalCommentaryTests(unittest.TestCase):
         self.assertIn("Syslog can also use TLS", commentary)
         self.assertIn("**SAMBA**: Samba is software that provides SMB/CIFS", commentary)
         self.assertIn("SMB may use NetBIOS", commentary)
-        self.assertIn("**`ALL`**: A broad service definition", commentary)
+        self.assertIn("**ALL**: A broad service definition", commentary)
         self.assertNotIn("**NetBIOS**:", commentary)
         self.assertNotIn("**FTP**:", commentary)
         self.assertNotIn("**SNMP**:", commentary)
@@ -1454,7 +1476,7 @@ class TechnicalCommentaryTests(unittest.TestCase):
         )
         report = build_report(config, run_fortigate_checks(config), "firewall.conf")
         commentary = report["technical_commentary"]
-        for explanation in ("**HTTP**:", "**Syslog**:", "**SAMBA**:", "**`ALL`**:"):
+        for explanation in ("**HTTP**:", "**Syslog**:", "**SAMBA**:", "**ALL**:"):
             self.assertIn(explanation, commentary)
 
     def test_findings_explain_limits_and_controls_relevant_to_their_evidence(self) -> None:
