@@ -8,7 +8,7 @@ import yaml
 
 from models.finding import FindingDefinition
 
-_REQUIRED_FIELDS = ("title", "category", "severity", "description", "recommendation")
+_REQUIRED_FIELDS = ("title", "category", "severity", "description", "impact", "recommendation")
 _SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
 
@@ -48,6 +48,7 @@ def load_finding_definitions() -> dict[str, FindingDefinition]:
             category=fields["category"],
             severity=severity,
             description=fields["description"],
+            impact=fields["impact"],
             recommendation=fields["recommendation"],
             sureformat_id=sureformat_id,
         )

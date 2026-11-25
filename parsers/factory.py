@@ -5,7 +5,9 @@ This module selects the appropriate parser based on the
 detected firewall vendor.
 """
 
+from parsers.cisco import CiscoParser
 from parsers.fortigate import FortigateParser
+from parsers.watchguard import WatchGuardParser
 
 
 class ParserFactory:
@@ -14,7 +16,7 @@ class ParserFactory:
     """
 
     @staticmethod
-    def get_parser(vendor: str) -> FortigateParser:
+    def get_parser(vendor: str) -> FortigateParser | CiscoParser | WatchGuardParser:
         """
         Return the parser associated with a vendor.
 
@@ -30,5 +32,9 @@ class ParserFactory:
 
         if vendor == "fortigate":
             return FortigateParser()
+        if vendor == "cisco":
+            return CiscoParser()
+        if vendor == "watchguard":
+            return WatchGuardParser()
 
         raise ValueError(f"No configuration parser is available for detected vendor: {vendor}.")

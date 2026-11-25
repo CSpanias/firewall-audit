@@ -22,6 +22,7 @@ class FindingDefinition:
     severity: str
     description: str
     recommendation: str
+    impact: str = ""
     sureformat_id: str | None = None
 
 
@@ -45,6 +46,7 @@ class Finding:
     category: str = "general"
 
     recommendation: str = ""
+    impact: str = ""
 
     affected_objects: list[str] = field(default_factory=list)
 

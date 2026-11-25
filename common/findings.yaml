@@ -7,6 +7,9 @@ findings:
     description: >-
       Enabled policy {rule_id} permits traffic with an unrestricted source and
       destination. Review the intended scope, interfaces, and required services.
+    impact: >-
+      An overly broad rule can permit unintended connections across network
+      boundaries and increase opportunities for lateral movement.
     recommendation: >-
       Restrict the policy to documented source and destination networks and the
       minimum required services. Confirm the rule owner and business purpose.
@@ -18,18 +21,24 @@ findings:
       Interface {interfaces} enables {services} for management access and is
       identified as WAN-facing. The configuration alone does not establish
       internet reachability or source restrictions.
+    impact: >-
+      If reachable by untrusted sources, administrative interfaces may be
+      exposed to credential attacks or vulnerabilities in management services.
     recommendation: >-
       Disable administrative services on public-facing interfaces where
       possible. Otherwise restrict management to dedicated, trusted source
       networks and verify reachability controls outside this configuration.
   admin-service-vip-policy:
-    title: Policy publishes firewall administration services through a VIP
+    title: Policy permits administrative services through a WAN-facing VIP
     category: access-control
     severity: high
     description: >-
       Enabled policy {rule_ids} permits {services} to a virtual IP configured
       on a WAN-facing interface. Verify that the mapped service is intended,
       source-restricted, and not a management plane for a network device.
+    impact: >-
+      If reachable from untrusted networks, administrative services on the
+      mapped systems may be exposed to credential attacks or exploitation.
     recommendation: >-
       Remove unnecessary administrative-service publishing. If required,
       restrict source networks, use a hardened management gateway, and verify
@@ -42,6 +51,9 @@ findings:
       Enabled allow policy {rule_ids} references {services}, which includes
       clear-text or legacy protocols or an unrestricted service definition.
       Confirm the actual protocol and business requirement.
+    impact: >-
+      Clear-text services can expose credentials and traffic to interception;
+      unrestricted services may permit protocols beyond those required.
     recommendation: >-
       Replace legacy protocols with secure alternatives, disable unused
       services and helpers, and explicitly restrict or block insecure services.
@@ -53,6 +65,9 @@ findings:
       No enabled Syslog or FortiAnalyzer destination was identified. Without
       centralized event collection, incident investigation and monitoring may
       be incomplete.
+    impact: >-
+      Missing centralized logs can reduce detection visibility and limit
+      evidence available for incident investigation.
     recommendation: >-
       Configure an approved centralized logging destination, enable the
       required event categories and policy logging, and validate ingestion,
@@ -65,6 +80,8 @@ findings:
       Enabled policies {rule_ids} explicitly disable traffic logging. Confirm
       that these exclusions are intentional and that equivalent monitoring is
       available.
+    impact: >-
+      Unlogged traffic can leave gaps in monitoring and incident investigation.
     recommendation: >-
       Enable policy logging where operationally appropriate and ensure
       exceptions are documented, monitored, and periodically reviewed.
@@ -76,6 +93,9 @@ findings:
       {admin_count} administrator account(s) were identified, but no configured
       RADIUS, LDAP, or TACACS+ server was found. Authentication centralization
       and account lifecycle controls should be reviewed.
+    impact: >-
+      Reliance on local accounts can make consistent access control, account
+      lifecycle management, and administrator auditing harder to enforce.
     recommendation: >-
       Where supported by operational requirements, use centrally managed
       administrator authentication with MFA. Review local accounts, trusted
@@ -88,6 +108,9 @@ findings:
       NTP synchronization is {sync_state}, but no explicit NTP server entry
       was found in the configuration. The time source and its trust boundary
       could not be verified.
+    impact: >-
+      Inaccurate or untrusted timestamps can hinder correlation of events and
+      the investigation of security incidents.
     recommendation: >-
       Configure approved time sources, restrict NTP access to those sources,
       and verify synchronized time across the firewall and monitoring systems.

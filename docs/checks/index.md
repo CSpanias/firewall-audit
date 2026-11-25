@@ -17,8 +17,11 @@ inventory; it does not claim that every control is completely assessed.
 
 Finding metadata lives in
 [`common/findings.yaml`](https://github.com/CSpanias/firewall-audit/blob/main/common/findings.yaml).
-Each finding includes a severity, evidence-based description, recommendation,
-and an optional SureFormat ID.
+Each finding includes a severity, evidence-based description, and recommendation.
+
+FortiOS supports the checks below. Cisco ASA/FTD supports the unrestricted
+endpoint and legacy service checks for bound ACL entries. WatchGuard PDF
+reports are currently inventoried without automated security checks.
 
 !!! note "Configuration context matters"
     The checks do not emulate the firewall, resolve every dynamic or nested

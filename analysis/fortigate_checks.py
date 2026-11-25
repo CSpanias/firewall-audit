@@ -1,10 +1,10 @@
 """Configuration-only review checks for FortiGate data."""
 
 import ipaddress
-import re
-from typing import Iterable
 
+from analysis.services import LEGACY_NAMES, LEGACY_PORTS, matching_rule_services
 from common.finding_definitions import load_finding_definitions
+from common.text import number_as_words
 from models.finding import Finding, FindingDefinition
 from models.firewall import FirewallConfig
 from models.rule import FirewallRule
@@ -12,23 +12,7 @@ from models.rule import FirewallRule
 _WILDCARDS = {"any", "all", "*", "0.0.0.0/0", "::/0"}
 _ALLOW_ACTIONS = {"accept", "allow", "permit"}
 _ADMIN_SERVICES = {"all", "http", "https", "ssh", "telnet", "rdp", "ms-rdp"}
-_LEGACY_SERVICES = {
-    "all",
-    "ftp",
-    "ftp-get",
-    "ftp-put",
-    "http",
-    "netbios-ns",
-    "netbios-ssn",
-    "rlogin",
-    "rsh",
-    "snmp",
-    "snmptrap",
-    "telnet",
-    "tftp",
-}
 _ADMIN_PORTS = {22, 23, 80, 443, 3389}
-_LEGACY_PORTS = {20, 21, 23, 69, 80, 137, 138, 139, 161, 162, 512, 513, 514}
 
 
 def _finding(
@@ -43,6 +27,7 @@ def _finding(
         category=definition.category,
         severity=definition.severity,
         description=definition.description.format(**description_values),
+        impact=definition.impact,
         recommendation=definition.recommendation,
         affected_objects=affected_objects,
         data=evidence,
@@ -58,78 +43,6 @@ def _is_open(rule: FirewallRule) -> bool:
     return any(map(_is_wildcard, rule.source_addresses)) and any(
         map(_is_wildcard, rule.destination_addresses)
     )
-
-
-def _port_ranges_match(values: Iterable[str], target_ports: set[int]) -> bool:
-    for value in values:
-        for token in re.findall(r"\d+(?:-\d+)?", value):
-            if "-" in token:
-                first, last = (int(part) for part in token.split("-", maxsplit=1))
-                low, high = min(first, last), min(max(first, last), 65535)
-            else:
-                low = high = int(token)
-            if any(low <= port <= high for port in target_ports):
-                return True
-    return False
-
-
-def _service_matches(
-    name: str,
-    config: FirewallConfig,
-    target_names: set[str],
-    target_ports: set[int],
-    visited: set[str] | None = None,
-) -> bool:
-    normalized = name.strip().lower()
-    if normalized in target_names:
-        return True
-
-    visited = visited or set()
-    if normalized in visited:
-        return False
-    visited.add(normalized)
-
-    members = next(
-        (
-            values
-            for group_name, values in config.service_groups.items()
-            if group_name.lower() == normalized
-        ),
-        None,
-    )
-    if members is not None:
-        return any(
-            _service_matches(member, config, target_names, target_ports, visited.copy())
-            for member in members
-        )
-
-    definition = next(
-        (
-            fields
-            for service_name, fields in config.service_definitions.items()
-            if service_name.lower() == normalized
-        ),
-        None,
-    )
-    if definition is None:
-        return False
-    return _port_ranges_match(
-        (
-            value
-            for key in ("tcp-portrange", "udp-portrange", "sctp-portrange")
-            for value in definition.get(key, [])
-        ),
-        target_ports,
-    )
-
-
-def _rule_services_match(
-    rule: FirewallRule,
-    config: FirewallConfig,
-    names: set[str],
-    ports: set[int],
-) -> list[str]:
-    return [service for service in rule.services if _service_matches(service, config, names, ports)]
 
 
 def _expand_address_group(
@@ -249,7 +162,7 @@ def run_fortigate_checks(config: FirewallConfig) -> list[Finding]:
     published_vips = _admin_vips(config)
     admin_vip_rules: list[tuple[FirewallRule, list[str]]] = []
     for rule in enabled_rules:
-        services = _rule_services_match(rule, config, _ADMIN_SERVICES, _ADMIN_PORTS)
+        services = matching_rule_services(rule, config, _ADMIN_SERVICES, _ADMIN_PORTS)
         destinations = set()
         for destination in rule.destination_addresses:
             destinations.update(_expand_address_group(destination, config))
@@ -282,7 +195,7 @@ def run_fortigate_checks(config: FirewallConfig) -> list[Finding]:
 
     legacy_rules: list[tuple[FirewallRule, list[str]]] = []
     for rule in enabled_rules:
-        matched = _rule_services_match(rule, config, _LEGACY_SERVICES, _LEGACY_PORTS)
+        matched = matching_rule_services(rule, config, LEGACY_NAMES, LEGACY_PORTS)
         if matched:
             legacy_rules.append((rule, matched))
     if legacy_rules:
@@ -348,7 +261,7 @@ def run_fortigate_checks(config: FirewallConfig) -> list[Finding]:
         findings.append(
             _finding(
                 definition,
-                {"admin_count": str(config.admin_account_count)},
+                {"admin_count": number_as_words(config.admin_account_count)},
                 ["Administrator authentication"],
                 {
                     "administrator_accounts": config.admin_account_count,

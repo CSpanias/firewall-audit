@@ -5,10 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from models.finding import Finding
 from models.firewall import FirewallConfig
+from reporting.narrative import build_narratives
 
 
 def build_report(
@@ -43,6 +42,7 @@ def build_report(
             "schedule": rule.schedule,
             "logging": rule.logging,
             "nat": rule.nat,
+            "bindings": rule.metadata.get("bindings"),
         }
         for rule in config.rules
     ]
@@ -52,10 +52,12 @@ def build_report(
         for severity in ("critical", "high", "medium", "low", "info")
     }
 
-    return {
+    report = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": source_name,
+        "checks_run": config.checks_supported,
+        "parse_warnings": config.parse_warnings,
         "device": {
             "vendor": config.vendor,
             "hostname": config.hostname,
@@ -83,7 +85,8 @@ def build_report(
             "severity_counts": severity_counts,
             "enabled_policies": sum(rule.enabled for rule in config.rules),
             "permitting_policies": sum(
-                rule.enabled and rule.action.lower() == "accept" for rule in config.rules
+                rule.enabled and rule.action.lower() in {"accept", "allow", "permit", "trust"}
+                for rule in config.rules
             ),
         },
         "network_architecture": {
@@ -163,6 +166,7 @@ def build_report(
                 "category": finding.category,
                 "severity": finding.severity,
                 "description": finding.description,
+                "impact": finding.impact,
                 "recommendation": finding.recommendation,
                 "affected_objects": finding.affected_objects,
                 "evidence": finding.data,
@@ -171,15 +175,10 @@ def build_report(
             for finding in findings
         ],
     }
-
-
-def export_yaml(report: dict[str, Any], filepath: Path) -> Path:
-    """Write an assessment report as YAML."""
-    filepath.write_text(
-        yaml.safe_dump(report, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-    return filepath
+    for key in config.unavailable_inventory:
+        report["inventory"][key] = None
+    report.update(build_narratives(report))
+    return report
 
 
 def export_json(report: dict[str, Any], filepath: Path) -> Path:

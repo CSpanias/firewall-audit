@@ -4,6 +4,10 @@ The parser records FortiGate firewall policies in order, including their
 interfaces, source and destination objects, services, action, enabled state,
 schedule, logging setting, and NAT setting.
 
+For Cisco ASA/FTD exports, the parser extracts extended and advanced ACL
+entries and their bindings. The checks apply only to bound ACLs; standard
+ACLs are excluded and reported as a parsing limitation.
+
 ## Unrestricted endpoints
 
 The `broad-allow-rule` check identifies enabled allow policies whose source and

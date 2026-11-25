@@ -37,10 +37,23 @@ def build_configuration_summary_table(config: FirewallConfig) -> Table:
     table.add_row("Hostname", _plain(config.hostname))
     table.add_row("Version", _plain(config.version))
     table.add_row("Model", _plain(config.model))
-    table.add_row("Interfaces", _plain(len(config.interfaces)))
-    table.add_row("Zones", _plain(len(config.zones)))
-    table.add_row("Address objects", _plain(len(config.objects)))
-    table.add_row("Object groups", _plain(len(config.object_groups)))
+    table.add_row(
+        "Interfaces",
+        _plain(None if "interfaces" in config.unavailable_inventory else len(config.interfaces)),
+    )
+    table.add_row(
+        "Zones", _plain(None if "zones" in config.unavailable_inventory else len(config.zones))
+    )
+    table.add_row(
+        "Address objects",
+        _plain(None if "address_objects" in config.unavailable_inventory else len(config.objects)),
+    )
+    table.add_row(
+        "Object groups",
+        _plain(
+            None if "object_groups" in config.unavailable_inventory else len(config.object_groups)
+        ),
+    )
     table.add_row("Rules", _plain(len(config.rules)))
     table.add_row("Enabled rules", _plain(sum(rule.enabled for rule in config.rules)))
 

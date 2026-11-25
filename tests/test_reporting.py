@@ -1,12 +1,13 @@
 """Tests for FortiOS parsing, checks, and report generation."""
 
+import io
 import json
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from contextlib import redirect_stdout
+from html.parser import HTMLParser
 from pathlib import Path
-
-import yaml
 
 from analysis.fortigate_checks import run_fortigate_checks
 from cli.audit import run_audit_workflow
@@ -15,7 +16,7 @@ from common.finding_definitions import load_finding_definitions
 from models.firewall import FirewallConfig
 from models.rule import FirewallRule
 from parsers.fortigate import FortigateParser
-from reporting.findings import build_report, export_json, export_yaml
+from reporting.findings import build_report, export_json
 from reporting.html import export_html, render_html
 from reporting.sureformat import export_sureformat
 
@@ -208,22 +209,26 @@ class FortiOSReportingTests(unittest.TestCase):
         findings = run_fortigate_checks(self.config)
 
         auth_finding = next(item for item in findings if item.id == "local-admin-auth")
-        self.assertIn("2 administrator account(s)", auth_finding.description)
+        self.assertIn("two administrator account(s)", auth_finding.description)
 
     def test_reports_omit_credentials_and_render_offline_html(self) -> None:
         findings = run_fortigate_checks(self.config)
         report = build_report(self.config, findings, self.config_path.name)
         html_path = export_html(report, self.directory / "report.html")
-        yaml_path = export_yaml(report, self.directory / "report.yaml")
+        json_path = export_json(report, self.directory / "report.json")
 
         html = html_path.read_text(encoding="utf-8")
-        yaml_report = yaml_path.read_text(encoding="utf-8")
+        json_report = json_path.read_text(encoding="utf-8")
         self.assertIn("Firewall Audit Report", html)
-        self.assertIn("search", html)
-        self.assertIn("management_services_on_wan", html)
+        self.assertIn("Executive Summary", html)
+        self.assertIn("Technical Commentary", html)
+        self.assertIn("Remediation Guidance", html)
+        self.assertIn("Copy All Markdown", html)
+        self.assertEqual(html.count(">Copy Markdown</button>"), 3)
+        self.assertIn("Supporting evidence", html)
         self.assertNotIn("never-include-this-secret", html)
-        self.assertNotIn("never-include-this-secret", yaml_report)
-        self.assertEqual(yaml.safe_load(yaml_report), report)
+        self.assertNotIn("never-include-this-secret", json_report)
+        self.assertEqual(json.loads(json_report), report)
         self.assertIn("branch-vpn", json.dumps(report))
 
     def test_html_escapes_untrusted_report_values_inside_embedded_json(self) -> None:
@@ -236,7 +241,37 @@ class FortiOSReportingTests(unittest.TestCase):
         )
 
         self.assertNotIn("</script><script>alert(1)", html)
-        self.assertIn("\\u003c/script\\u003e", html)
+        self.assertIn("\\u003c", html)
+
+    def test_markdown_copy_payload_matches_narratives_and_includes_evidence(self) -> None:
+        report = build_report(self.config, run_fortigate_checks(self.config), "firewall.conf")
+        html = render_html(report)
+
+        class PayloadParser(HTMLParser):
+            in_payload = False
+            payload = ""
+
+            def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                self.in_payload = tag == "script" and dict(attrs).get("id") == "markdown-data"
+
+            def handle_data(self, data: str) -> None:
+                if self.in_payload:
+                    self.payload += data
+
+            def handle_endtag(self, tag: str) -> None:
+                if tag == "script":
+                    self.in_payload = False
+
+        parser = PayloadParser()
+        parser.feed(html)
+        markdown = json.loads(parser.payload)
+        self.assertEqual(markdown["executive_summary"], report["executive_summary"])
+        self.assertEqual(markdown["technical_commentary"], report["technical_commentary"])
+        self.assertEqual(markdown["remediation_guidance"], report["remediation_guidance"])
+        self.assertIn("| Rule |", markdown["technical_commentary"])
+        self.assertIn("Policy 2", markdown["technical_commentary"])
+        self.assertIn("## Executive Summary", markdown["all"])
+        self.assertIn("## Remediation Guidance", markdown["all"])
 
     def test_sureformat_export_only_includes_explicitly_mapped_findings(self) -> None:
         findings = run_fortigate_checks(self.config)
@@ -251,16 +286,29 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertEqual(unmapped, len(findings) - 1)
         self.assertEqual([item.attrib["id"] for item in mapped], ["SC-1234"])
 
-    def test_cli_accepts_csacyber_and_writes_html_and_structured_report(self) -> None:
+    def test_cli_defaults_to_json_and_html(self) -> None:
+        arguments = build_parser().parse_args(
+            ["--config", str(self.config_path), "--output-dir", str(self.directory)]
+        )
+        run_audit_workflow(arguments)
+
+        suffixes = {
+            path.suffix for path in self.directory.iterdir() if path.name.startswith("fortigate-")
+        }
+        self.assertEqual(suffixes, {".json", ".html"})
+
+    def test_cli_accepts_csacyber_and_writes_html_and_xml(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit):
+            build_parser().parse_args(["--help"])
+        self.assertNotIn("--csacyber", output.getvalue())
+
         arguments = build_parser().parse_args(
             [
-                "audit",
                 "--config",
                 str(self.config_path),
                 "--output-dir",
                 str(self.directory),
-                "--format",
-                "both",
                 "--csacyber",
             ]
         )
@@ -269,14 +317,12 @@ class FortiOSReportingTests(unittest.TestCase):
         suffixes = {
             path.suffix for path in self.directory.iterdir() if path.name.startswith("fortigate-")
         }
-        self.assertEqual(suffixes, {".yaml", ".json", ".html", ".xml"})
+        self.assertEqual(suffixes, {".html", ".xml"})
 
-    def test_structured_reports_round_trip_as_yaml_and_json(self) -> None:
+    def test_structured_report_round_trips_as_json(self) -> None:
         report = build_report(self.config, run_fortigate_checks(self.config), "fortigate.conf")
-        yaml_path = export_yaml(report, self.directory / "roundtrip.yaml")
         json_path = export_json(report, self.directory / "roundtrip.json")
 
-        self.assertEqual(yaml.safe_load(yaml_path.read_text(encoding="utf-8")), report)
         self.assertEqual(json.loads(json_path.read_text(encoding="utf-8")), report)
 
 

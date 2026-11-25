@@ -61,6 +61,9 @@ class FirewallConfig:
     session_helpers: list[dict[str, str]] = field(default_factory=list)
     ssl_vpn: dict[str, str] = field(default_factory=dict)
     config_build: str | None = None
+    parse_warnings: list[str] = field(default_factory=list)
+    unavailable_inventory: set[str] = field(default_factory=set)
+    checks_supported: bool = True
 
     # ---------------------------------------------------------------------------
     # VPN Security

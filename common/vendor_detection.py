@@ -9,6 +9,9 @@ The detected vendor is used to select the appropriate parser.
 
 from pathlib import Path
 
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
+
 
 class VendorDetector:
     """
@@ -49,7 +52,21 @@ class VendorDetector:
             ValueError: If no supported vendor is detected.
         """
 
-        content = Path(filepath).read_text(encoding="utf-8", errors="ignore")
+        path = Path(filepath)
+        with path.open("rb") as source:
+            signature = source.read(5)
+        if signature == b"%PDF-":
+            try:
+                pdf = PdfReader(path)
+                if pdf.is_encrypted:
+                    raise ValueError("Encrypted PDF reports are not supported.")
+                if pdf.pages and "Firebox Configuration Report" in pdf.pages[0].extract_text():
+                    return "watchguard"
+            except PdfReadError as exc:
+                raise ValueError(f"Unable to read PDF report: {exc}") from exc
+            raise ValueError("The PDF is not a recognised Firebox Configuration Report.")
+
+        content = path.read_text(encoding="utf-8", errors="ignore")
 
         scores = {vendor: 0 for vendor in cls.FINGERPRINTS}
 

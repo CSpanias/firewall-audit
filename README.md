@@ -1,8 +1,9 @@
 # Firewall-Audit
 
 Firewall-Audit reviews exported firewall configurations and extracts
-security-relevant context for an analyst. The current modular workflow supports
-FortiOS text configuration backups.
+security-relevant context for an analyst. It supports FortiOS and Cisco
+ASA/FTD text exports, and limited policy inventory from WatchGuard Firebox
+configuration report PDFs.
 
 The review follows the areas described in
 [Firewall Security Explained](https://mollysec.com/posts/firewall-security-explained/):
@@ -27,21 +28,16 @@ uv sync --group dev
 ## Usage
 
 ```powershell
-firewall-audit audit --config firewall.conf
-firewall-audit audit -C firewall.conf --output-dir reports --format both
-firewall-audit audit -C firewall.conf --csacyber
+firewall-audit --config firewall.conf
+firewall-audit -C firewall.conf --output-dir reports
 ```
 
-The default output is a timestamped YAML report and a self-contained HTML
-dashboard. `--format` accepts `yaml`, `json`, or `both`; HTML is always
-generated. `--csacyber` additionally exports a SureFormat XML file containing
-only findings with an explicitly configured CSA Cyber `sureformat_id`.
-Unmapped findings are reported in the terminal and omitted from that XML.
+Each run generates a timestamped JSON report and a self-contained HTML report.
 
-The HTML dashboard works offline and includes device and inventory summaries,
-interface and zone details, policy and VPN tables, administration, logging,
-monitoring, NAT, and searchable/filterable findings with evidence and
-recommendations. Credential values are not included in exported reports.
+The HTML report works offline and provides an executive summary, technical
+commentary with supporting evidence, and remediation guidance. Each section
+and the complete report can be copied as Markdown. Credential fields are not
+included in exported reports.
 
 ## Current review coverage
 
@@ -51,7 +47,7 @@ firewall and local-in policies, VIPs, IPsec and SSL VPN configuration,
 administrator and central-authentication counts, remote logging, NTP, SNMP
 counts, and session helpers.
 
-The current checks identify:
+FortiOS checks identify:
 
 * Enabled allow policies with unrestricted source and destination.
 * Management services enabled on WAN-facing interfaces.
@@ -60,9 +56,12 @@ The current checks identify:
 * Missing remote logging and explicitly disabled policy logging.
 * Missing explicit NTP server entries.
 
-Finding metadata and optional CSA Cyber mappings are maintained in
-[`common/findings.yaml`](common/findings.yaml). Add a validated SureFormat ID to
-a finding definition when a mapping is confirmed; IDs are not guessed.
+Cisco checks review bound ACL entries for unrestricted endpoints and
+clear-text, legacy, or unrestricted services. Standard ACLs are not included.
+The WatchGuard PDF parser currently inventories policy names, order, state,
+action, and logging only; it does not run security checks.
+
+Finding metadata is maintained in [`common/findings.yaml`](common/findings.yaml).
 
 ## Documentation
 
@@ -79,8 +78,9 @@ python -m mkdocs build --strict
 
 ## Limitations
 
-* Cisco, ASA/FTD, and other vendor configurations are not yet supported by the
-  modular parser.
+* WatchGuard PDF source and destination addresses, services, and detailed
+  settings are not parsed. The report is an inventory, not a security review.
+* Cisco ACL checks do not calculate effective policy order or reachability.
 * A static export cannot prove which interfaces or services are reachable from
   the internet, how upstream routing behaves, or whether a rule is justified.
 * Service groups and address groups are reported and expanded for supported

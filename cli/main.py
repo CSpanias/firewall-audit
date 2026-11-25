@@ -25,44 +25,30 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=dedent(
             """\
             Examples:
-              firewall-audit audit --config firewall.conf
-              firewall-audit audit -C firewall.conf -O reports --format both
+              firewall-audit --config firewall.conf
+              firewall-audit -C firewall.conf -O reports
             """
         ),
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    audit_parser = subparsers.add_parser(
-        "audit",
-        help="Review a firewall configuration",
-        description="Parse a supported firewall configuration and generate a review report.",
-        formatter_class=HelpFormatter,
-    )
-    audit_parser.add_argument(
+    parser.add_argument(
         "-C",
         "--config",
         required=True,
         metavar="FILE",
         help="Path to the exported firewall configuration.",
     )
-    audit_parser.add_argument(
+    parser.add_argument(
         "-O",
         "--output-dir",
         default="firewall-audit-output",
         metavar="DIR",
         help="Directory for generated reports.",
     )
-    audit_parser.add_argument(
-        "--format",
-        choices=("yaml", "json", "both"),
-        default="yaml",
-        help="Structured report format. An HTML report is always generated.",
-    )
-    audit_parser.add_argument(
+    parser.add_argument(
         "--csacyber",
         action="store_true",
-        help="Also export mapped findings in CSA Cyber SureFormat XML.",
+        help=argparse.SUPPRESS,
     )
-    audit_parser.set_defaults(func=run_audit_workflow)
     return parser
 
 
@@ -71,7 +57,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        args.func(args)
+        run_audit_workflow(args)
     except (OSError, ValueError) as exc:
         console.print(Text(f"Error: {exc}", style="bold red"))
         parser.exit(2)

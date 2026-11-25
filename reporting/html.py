@@ -1,13 +1,43 @@
-"""Self-contained HTML dashboard for firewall assessment reports."""
+"""Self-contained HTML assessment report with Markdown copy controls."""
 
 import json
+from html import escape
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+import markdown
+from markdown.extensions import Extension
+from markdown.treeprocessors import Treeprocessor
+
+from reporting.narrative import build_narratives
 
 
-def _safe_json(report: dict[str, Any]) -> str:
+class _SafeLinks(Treeprocessor):
+    def run(self, root: Any) -> None:
+        for element in root.iter():
+            if element.tag == "a":
+                try:
+                    url = urlsplit(element.get("href", ""))
+                    valid = url.scheme.lower() in {"http", "https"} and bool(url.netloc)
+                except ValueError:
+                    valid = False
+                if not valid:
+                    element.attrib.pop("href", None)
+            elif element.tag == "img":
+                element.tag = "span"
+                element.text = element.get("alt", "")
+                element.attrib.clear()
+
+
+class _SafeLinksExtension(Extension):
+    def extendMarkdown(self, md: Any) -> None:
+        md.treeprocessors.register(_SafeLinks(md), "safe_links", 0)
+
+
+def _safe_json(value: Any) -> str:
     return (
-        json.dumps(report, ensure_ascii=False)
+        json.dumps(value, ensure_ascii=False)
         .replace("&", "\\u0026")
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
@@ -16,9 +46,53 @@ def _safe_json(report: dict[str, Any]) -> str:
     )
 
 
+def _render_markdown(text: str) -> str:
+    return markdown.markdown(
+        escape(text, quote=False), extensions=["tables", _SafeLinksExtension()]
+    )
+
+
 def render_html(report: dict[str, Any]) -> str:
-    """Render a fully offline report; untrusted report values are inserted as text."""
-    data = _safe_json(report)
+    """Render a self-contained, safely escaped assessment report."""
+    narratives = build_narratives(report)
+    sections = (
+        ("executive_summary", "Executive Summary"),
+        ("technical_commentary", "Technical Commentary"),
+        ("remediation_guidance", "Remediation Guidance"),
+    )
+    markdown_data = dict(narratives)
+    markdown_data["all"] = "\n\n".join(
+        f"## {title}\n\n{narratives[key]}" for key, title in sections
+    )
+
+    def controls(key: str, label: str) -> str:
+        return (
+            f'<div class="copy-controls"><button type="button" class="copy-button" '
+            f'data-copy="{key}">{label}</button>'
+            '<span class="copy-status" role="status" aria-live="polite"></span></div>'
+        )
+
+    rendered = "\n".join(
+        f"<section><h2>{title}</h2>{controls(key, 'Copy Markdown')}"
+        f"{_render_markdown(narratives[key])}</section>"
+        for key, title in sections
+    )
+    device = report.get("device", {})
+    subtitle = " · ".join(
+        str(value)
+        for value in (device.get("hostname"), device.get("vendor"), device.get("model"))
+        if value
+    )
+    inventory = report.get("inventory", {})
+    cards = "\n".join(
+        f'<div class="card"><span>{label}</span><strong>'
+        f"{escape(str(inventory.get(key) if inventory.get(key) is not None else 'Not parsed'))}</strong></div>"
+        for key, label in (
+            ("interfaces", "Interfaces"),
+            ("rules", "Policies"),
+            ("findings", "Review indicators"),
+        )
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -28,251 +102,68 @@ def render_html(report: dict[str, Any]) -> str:
   <style>
     :root {{ color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f3f6fa; }}
     body {{ margin: 0; }}
-    header {{ padding: 2rem max(1rem, calc((100% - 1180px) / 2)); background: #10233f; color: white; }}
+    header {{ padding: 2rem max(1rem, calc((100% - 1100px) / 2)); background: #10233f; color: white; }}
     header h1 {{ margin: 0; }}
-    main {{ max-width: 1180px; margin: 2rem auto; padding: 0 1rem; }}
-    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; }}
+    main {{ max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }}
+    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; }}
     .card, section {{ background: white; border: 1px solid #dce3ed; border-radius: .6rem; padding: 1rem; }}
-    .card strong {{ display: block; font-size: 1.5rem; margin-top: .35rem; }}
-    section {{ margin: 1rem 0; overflow-wrap: anywhere; }}
+    .card strong {{ display: block; margin-top: .35rem; }}
+    section {{ margin: 1rem 0; line-height: 1.55; overflow-wrap: anywhere; overflow-x: auto; }}
     table {{ border-collapse: collapse; width: 100%; }}
     th, td {{ border: 1px solid #dce3ed; padding: .5rem; text-align: left; vertical-align: top; }}
     th {{ background: #f3f6fa; }}
-    .table-wrap {{ overflow-x: auto; }}
-    .filters {{ display: flex; flex-wrap: wrap; gap: .7rem; margin: 1rem 0; }}
-    input, select {{ padding: .6rem; border: 1px solid #9aa8bb; border-radius: .35rem; background: white; color: inherit; }}
-    input {{ flex: 1; min-width: 220px; }}
-    .finding {{ margin: .75rem 0; padding: 1rem; border: 1px solid #dce3ed; border-left: 5px solid #607d9d; border-radius: .5rem; }}
-    .finding.critical, .finding.high {{ border-left-color: #b42318; }}
-    .finding.medium {{ border-left-color: #b7791f; }}
-    .finding.low {{ border-left-color: #2563a6; }}
-    .finding h3 {{ margin: 0; }}
-    .badge {{ display: inline-block; margin: .5rem .4rem .5rem 0; padding: .15rem .5rem; border-radius: 1rem; background: #e8edf4; font-size: .82rem; }}
-    details {{ margin: .55rem 0; }}
-    summary {{ cursor: pointer; font-weight: 650; }}
-    pre {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
-    .muted, footer {{ color: #53647b; }}
-    footer {{ margin: 2rem 0; font-size: .9rem; }}
-    [hidden] {{ display: none !important; }}
+    .copy-controls {{ display: flex; align-items: center; gap: .75rem; margin: .75rem 0; }}
+    .copy-button {{ padding: .45rem .7rem; border: 1px solid #9aa8bb; border-radius: .35rem; background: #f3f6fa; color: inherit; cursor: pointer; }}
+    .copy-button:disabled {{ cursor: wait; opacity: .7; }}
+    .copy-status {{ color: #53647b; font-size: .9rem; }}
+    .copy-buffer {{ position: fixed; left: -9999px; top: 0; }}
+    footer {{ color: #53647b; margin: 2rem 0; font-size: .9rem; }}
   </style>
 </head>
 <body>
-  <header><h1>Firewall Audit Report</h1><p id="device-subtitle"></p></header>
+  <header><h1>Firewall Audit Report</h1><p>{escape(subtitle)}</p></header>
   <main>
-    <div class="cards" id="summary" aria-label="Assessment summary"></div>
-    <section>
-      <h2>Assessment context</h2>
-      <p>This report summarizes configuration evidence. Findings are indicators for analyst review, not proof of external reachability or exploitability.</p>
-      <p id="report-metadata" class="muted"></p>
-    </section>
-    <section><h2>Network architecture</h2><div id="interfaces"></div><div id="zones"></div></section>
-    <section><h2>Access control</h2><div id="policy-summary"></div><div id="policies"></div></section>
-    <section><h2>VPN and remote access</h2><div id="vpn-summary"></div><div id="vpns"></div></section>
-    <section><h2>Administration and authentication</h2><div id="administration"></div></section>
-    <section><h2>Logging and monitoring</h2><div id="logging"></div><div id="monitoring"></div></section>
-    <section><h2>NAT and published services</h2><div id="nat"></div></section>
-    <section aria-labelledby="findings-heading">
-      <h2 id="findings-heading">Findings</h2>
-      <div class="filters">
-        <input id="search" type="search" placeholder="Search findings and evidence" aria-label="Search findings">
-        <select id="severity-filter" aria-label="Filter by severity"><option value="">All severities</option></select>
-        <select id="category-filter" aria-label="Filter by review area"><option value="">All review areas</option></select>
-      </div>
-      <p id="finding-count" class="muted" aria-live="polite"></p>
-      <div id="findings"></div>
-    </section>
+    <div class="cards" aria-label="Assessment overview">{cards}</div>
+    {controls("all", "Copy All Markdown")}
+    {rendered}
     <footer>Generated by Firewall-Audit. This report works offline and loads no external resources.</footer>
   </main>
-  <script id="report-data" type="application/json">{data}</script>
+  <script id="markdown-data" type="application/json">{_safe_json(markdown_data)}</script>
   <script>
-    "use strict";
-    const report = JSON.parse(document.getElementById("report-data").textContent);
-    const escLabel = value => String(value ?? "N/A");
-    const make = (tag, text, className) => {{
-      const el = document.createElement(tag);
-      if (text !== undefined && text !== null) el.textContent = String(text);
-      if (className) el.className = className;
-      return el;
-    }};
-    const table = (headers, rows) => {{
-      const wrap = make("div", undefined, "table-wrap");
-      const t = document.createElement("table");
-      const head = t.createTHead().insertRow();
-      for (const label of headers) head.append(make("th", label));
-      const body = t.createTBody();
-      for (const row of rows) {{
-        const tr = body.insertRow();
-        for (const value of row) tr.append(make("td", Array.isArray(value) ? value.join(", ") : value));
+    const markdownData = JSON.parse(document.getElementById("markdown-data").textContent);
+    async function copyMarkdown(text) {{
+      if (navigator.clipboard?.writeText && window.isSecureContext) {{
+        await navigator.clipboard.writeText(text);
+        return;
       }}
-      if (!rows.length) {{
-        const tr = body.insertRow();
-        const cell = tr.insertCell();
-        cell.colSpan = headers.length;
-        cell.textContent = "No configuration entries identified.";
+      const buffer = document.createElement("textarea");
+      buffer.value = text;
+      buffer.className = "copy-buffer";
+      document.body.append(buffer);
+      buffer.select();
+      let copied;
+      try {{
+        copied = document.execCommand("copy");
+      }} finally {{
+        buffer.remove();
       }}
-      wrap.append(t);
-      return wrap;
-    }};
-    const entries = value => Array.isArray(value) ? value.join(", ") : escLabel(value);
-    const device = report.device || {{}};
-    const inventory = report.inventory || {{}};
-    const summary = report.summary || {{}};
-    const areas = {{
-      "Interfaces": inventory.interfaces,
-      "Zones": inventory.zones,
-      "Policies": inventory.rules,
-      "Active VPNs": inventory.enabled_vpns,
-      "Virtual IPs": inventory.virtual_ips,
-      "Findings": inventory.findings
-    }};
-    const cards = document.getElementById("summary");
-    for (const [label, value] of Object.entries(areas)) {{
-      const card = make("div", undefined, "card");
-      card.append(make("span", label), make("strong", value ?? 0));
-      cards.append(card);
+      if (!copied) throw new Error("Clipboard access is unavailable.");
     }}
-    document.getElementById("device-subtitle").textContent =
-      [device.hostname, device.vendor, device.model, device.version && `FortiOS ${{device.version}}`]
-        .filter(Boolean).join(" · ") || "Firewall configuration assessment";
-    document.getElementById("report-metadata").textContent =
-      `Source: ${{report.source || "N/A"}} · Generated: ${{report.generated_at || "N/A"}}`;
-
-    const architecture = report.network_architecture || {{}};
-    document.getElementById("interfaces").append(
-      make("h3", "Interfaces"),
-      table(
-        ["Name", "Address", "Role", "State", "Management access", "Internet-facing"],
-        (architecture.interfaces || []).map(item => [
-          item.name, item.address, item.role, item.enabled ? "Enabled" : "Disabled",
-          item.management_services, item.internet_facing ? "Yes" : "No"
-        ])
-      )
-    );
-    const zoneRows = Object.entries(architecture.zones || {{}}).map(([name, members]) => [name, members]);
-    document.getElementById("zones").append(make("h3", "Security zones"), table(["Zone", "Interfaces"], zoneRows));
-
-    const access = report.access_control || {{}};
-    const policies = access.policies || [];
-    document.getElementById("policy-summary").textContent =
-      `${{summary.permitting_policies ?? 0}} enabled allow policies · ${{inventory.disabled_rules ?? 0}} disabled policies`;
-    document.getElementById("policies").append(table(
-      ["ID", "Action", "State", "Source", "Destination", "Services", "Logging", "NAT"],
-      policies.map(rule => [
-        rule.id, rule.action, rule.enabled ? "Enabled" : "Disabled",
-        rule.source_addresses, rule.destination_addresses, rule.services,
-        rule.logging || "Not specified", rule.nat === null ? "Not specified" : rule.nat ? "Enabled" : "Disabled"
-      ])
-    ));
-
-    const remote = report.remote_access || {{}};
-    const vpns = remote.ipsec_vpns || [];
-    document.getElementById("vpn-summary").textContent =
-      `${{inventory.enabled_vpns ?? 0}} enabled · ${{inventory.disabled_vpns ?? 0}} disabled`;
-    document.getElementById("vpns").append(table(
-      ["Tunnel", "State", "Interface", "Remote gateway"],
-      vpns.map(vpn => [vpn.name, vpn.enabled ? "Enabled" : "Disabled", vpn.interface, vpn.remote_gateway])
-    ));
-    document.getElementById("vpns").append(
-      make("p", `SSL VPN: ${{Object.keys(remote.ssl_vpn || {{}}).length ? JSON.stringify(remote.ssl_vpn) : "Not configured"}}`)
-    );
-
-    const admin = report.administration || {{}};
-    document.getElementById("administration").append(
-      make("p", `${{admin.administrator_accounts ?? 0}} administrator account(s); ${{admin.remote_auth_accounts ?? 0}} use remote authentication.`),
-      make("h3", "Configured central authentication"),
-      table(["Type", "Name", "Server"], (admin.aaa_servers || []).map(item => [item.type, item.name, item.server])),
-      make("h3", "Management services on WAN-facing interfaces"),
-      table(["Interface", "Address", "Services"], (admin.management_services_on_wan || [])
-        .map(item => [item.name, item.address, item.management_services]))
-    );
-
-    const logging = report.logging || {{}};
-    const destinations = Object.entries(logging.destinations || {{}}).map(([type, fields]) => [
-      type, fields.status, fields.server, fields.port, fields.mode
-    ]);
-    document.getElementById("logging").append(
-      make("h3", "Remote logging"),
-      table(["Destination", "Status", "Server", "Port", "Mode"], destinations),
-      make("p", `Enabled policies explicitly configured for logging: ${{logging.policy_logging_explicitly_configured ?? 0}}`)
-    );
-    const monitoring = report.monitoring || {{}};
-    document.getElementById("monitoring").append(
-      make("h3", "NTP and SNMP"),
-      table(
-        ["Control", "Configuration"],
-        [["NTP", JSON.stringify(monitoring.ntp || {{}})], ["SNMP", JSON.stringify(monitoring.snmp || {{}})]]
-      ),
-      make("h3", "Session helpers"),
-      table(["Name", "Protocol", "Port"], (monitoring.session_helpers || [])
-        .map(item => [item.name, item.protocol, item.port]))
-    );
-
-    const nat = report.nat || {{}};
-    document.getElementById("nat").append(
-      make("h3", "Virtual IPs"),
-      table(
-        ["Name", "External IP", "Mapped IP", "External interface", "Port forwarding"],
-        (nat.virtual_ips || []).map(vip => [
-          vip.name, vip.extip, vip.mappedip, vip.extintf, vip.portforward
-        ])
-      ),
-      make("p", `Enabled policies with NAT: ${{(nat.policies_with_nat_enabled || []).join(", ") || "None identified"}}`)
-    );
-
-    const findings = report.findings || [];
-    const severityFilter = document.getElementById("severity-filter");
-    const categoryFilter = document.getElementById("category-filter");
-    for (const [select, values] of [
-      [severityFilter, [...new Set(findings.map(item => item.severity || "info"))].sort()],
-      [categoryFilter, [...new Set(findings.map(item => item.category || "general"))].sort()]
-    ]) {{
-      for (const value of values) select.append(make("option", value));
-      for (const option of [...select.options].slice(1)) option.value = option.textContent;
+    for (const button of document.querySelectorAll(".copy-button")) {{
+      button.addEventListener("click", async () => {{
+        const status = button.nextElementSibling;
+        button.disabled = true;
+        status.textContent = "Copying...";
+        try {{
+          await copyMarkdown(markdownData[button.dataset.copy]);
+          status.textContent = "Copied Markdown to clipboard.";
+        }} catch {{
+          status.textContent = "Copy failed. Select and copy the text manually.";
+        }} finally {{
+          button.disabled = false;
+        }}
+      }});
     }}
-    const findingContainer = document.getElementById("findings");
-    for (const finding of findings) {{
-      const card = make("article", undefined, `finding ${{String(finding.severity || "info").toLowerCase()}}`);
-      card.dataset.severity = String(finding.severity || "info").toLowerCase();
-      card.dataset.category = finding.category || "general";
-      card.append(
-        make("h3", `${{finding.id}} · ${{finding.title}}`),
-        make("span", finding.severity, "badge"),
-        make("span", finding.category || "general", "badge"),
-        make("p", finding.description)
-      );
-      if (finding.affected_objects?.length) {{
-        card.append(make("p", `Affected: ${{finding.affected_objects.join(", ")}}`));
-      }}
-      card.append(make("p", `Recommendation: ${{finding.recommendation}}`));
-      if (finding.evidence && Object.keys(finding.evidence).length) {{
-        const details = document.createElement("details");
-        details.append(make("summary", "Evidence"));
-        details.append(make("pre", JSON.stringify(finding.evidence, null, 2)));
-        card.append(details);
-      }}
-      findingContainer.append(card);
-    }}
-    const noMatches = make("p", "No findings match the selected filters.", "muted");
-    findingContainer.append(noMatches);
-    function updateFindings() {{
-      const query = document.getElementById("search").value.trim().toLowerCase();
-      let shown = 0;
-      for (const card of findingContainer.querySelectorAll(".finding")) {{
-        const matches = (!severityFilter.value || card.dataset.severity === severityFilter.value)
-          && (!categoryFilter.value || card.dataset.category === categoryFilter.value)
-          && (!query || card.textContent.toLowerCase().includes(query));
-        card.hidden = !matches;
-        if (matches) shown++;
-      }}
-      noMatches.hidden = shown > 0;
-      document.getElementById("finding-count").textContent =
-        `${{shown}} of ${{findings.length}} finding(s)`;
-    }}
-    for (const id of ["search", "severity-filter", "category-filter"]) {{
-      document.getElementById(id).addEventListener("input", updateFindings);
-      document.getElementById(id).addEventListener("change", updateFindings);
-    }}
-    updateFindings();
   </script>
 </body>
 </html>
