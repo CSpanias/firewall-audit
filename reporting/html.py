@@ -87,7 +87,11 @@ def render_html(report: dict[str, Any]) -> str:
     device = report.get("device", {})
     subtitle = " · ".join(
         str(value)
-        for value in (device.get("hostname"), device.get("vendor"), device.get("model"))
+        for value in (
+            device.get("hostname"),
+            device.get("vendor"),
+            device.get("platform") or device.get("model"),
+        )
         if value
     )
     inventory = report.get("inventory", {})

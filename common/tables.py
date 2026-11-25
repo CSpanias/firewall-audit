@@ -36,7 +36,12 @@ def build_configuration_summary_table(config: FirewallConfig) -> Table:
     table.add_row("Vendor", _plain(config.vendor))
     table.add_row("Hostname", _plain(config.hostname))
     table.add_row("Version", _plain(config.version))
-    table.add_row("Model", _plain(config.model))
+    if config.platform:
+        table.add_row("Platform", _plain(config.platform))
+    elif config.platform_identifier:
+        table.add_row("Platform identifier", _plain(config.platform_identifier))
+    else:
+        table.add_row("Model", _plain(config.model))
     table.add_row(
         "Interfaces",
         _plain(None if "interfaces" in config.unavailable_inventory else len(config.interfaces)),

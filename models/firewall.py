@@ -32,6 +32,8 @@ class FirewallConfig:
     hostname: str | None = None
     version: str | None = None
     model: str | None = None
+    platform: str | None = None
+    platform_identifier: str | None = None
 
     # ---------------------------------------------------------------------------
     # Network Architecture

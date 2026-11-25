@@ -167,7 +167,9 @@ class FortigateParser:
         for line in lines:
             match = _VERSION.match(line.strip())
             if match:
-                config.model = match.group(1)
+                config.platform_identifier = match.group(1)
+                if config.platform_identifier.upper() == "FGVMAZ":
+                    config.platform = "FortiGate-VM (Azure)"
                 config.version = match.group(2)
                 config.config_build = match.group(3)
                 break

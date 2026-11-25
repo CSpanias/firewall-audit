@@ -35,9 +35,14 @@ def export_markdown(report: dict[str, Any], filepath: Path) -> Path:
         ("Vendor", "vendor"),
         ("Hostname", "hostname"),
         ("Version", "version"),
-        ("Model", "model"),
     ):
         lines.append(f"| {label} | {_cell(device[key])} |")
+    if device.get("platform"):
+        lines.append(f"| Platform | {_cell(device['platform'])} |")
+    elif device.get("platform_identifier"):
+        lines.append(f"| Platform identifier | {_cell(device['platform_identifier'])} |")
+    else:
+        lines.append(f"| Model | {_cell(device['model'])} |")
 
     lines.extend(
         [

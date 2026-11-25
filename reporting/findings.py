@@ -63,6 +63,8 @@ def build_report(
             "hostname": config.hostname,
             "version": config.version,
             "model": config.model,
+            "platform": config.platform,
+            "platform_identifier": config.platform_identifier,
             "build": config.config_build,
         },
         "inventory": {

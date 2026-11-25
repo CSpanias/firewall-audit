@@ -294,19 +294,19 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     hostname = _code(device["hostname"]) if device.get("hostname") else "the supplied firewall"
     if not report.get("checks_run", True):
         introduction = (
-            f"A configuration inventory was generated for {hostname} ({_text(vendor)}). "
+            f"A configuration inventory was generated for {hostname}. "
             "The supplied report was not assessed using automated security checks."
         )
     elif vendor.lower() == "cisco":
         introduction = (
-            f"A firewall configuration review was performed against {hostname} "
-            f"({_text(vendor)}). The automated checks considered bound access-control "
+            f"A firewall configuration review was performed against {hostname}. "
+            "The automated checks considered bound access-control "
             "entries for unrestricted endpoints and legacy or broadly defined services."
         )
     elif vendor.lower() == "fortinet":
         introduction = (
             f"A firewall configuration review was performed against {hostname} "
-            f"({_text(vendor)}) to identify settings that could increase exposure to "
+            "to identify settings that could increase exposure to "
             "unauthorised access, weaken network segmentation or reduce the effectiveness "
             "of security controls. The review considered firewall policies, administrative "
             "access controls, logging configuration and supporting infrastructure services."
@@ -314,8 +314,14 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     else:
         introduction = (
             f"A firewall configuration review was performed against {hostname} "
-            f"({_text(vendor)}) using the available automated checks."
+            "using the available automated checks."
         )
+    if device.get("platform"):
+        platform_label, platform_value = "Platform", device["platform"]
+    elif device.get("platform_identifier"):
+        platform_label, platform_value = "Platform identifier", device["platform_identifier"]
+    else:
+        platform_label, platform_value = "Model", device.get("model")
     commentary = [
         introduction,
         "The table below summarises the available characteristics of the reviewed configuration.",
@@ -325,7 +331,7 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
             [
                 ["Vendor", device.get("vendor")],
                 ["Hostname", device.get("hostname")],
-                ["Model", device.get("model")],
+                [platform_label, platform_value],
                 ["Version", device.get("version")],
                 ["Interfaces", inventory.get("interfaces", 0)],
                 ["Policies", inventory.get("rules", 0)],

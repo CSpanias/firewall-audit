@@ -94,6 +94,17 @@ class CiscoParserTests(unittest.TestCase):
             any("Could not parse 1 ACL entries" in warning for warning in config.parse_warnings)
         )
 
+    def test_cisco_model_remains_in_the_configuration_overview(self) -> None:
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write("Cisco Firepower 1010 Threat Defense\n")
+        config = CiscoParser().parse(str(self.path))
+        report = build_report(config, [], self.path.name)
+        self.assertEqual(config.model, "Cisco Firepower 1010 Threat Defense")
+        self.assertIn(
+            "| Model | `Cisco Firepower 1010 Threat Defense` |", report["technical_commentary"]
+        )
+        self.assertNotIn("`fw-example` (Cisco)", report["technical_commentary"])
+
 
 class _Page:
     def __init__(self, text: str, layout: str) -> None:
@@ -121,6 +132,8 @@ Firewall Policies Details
         with patch("parsers.watchguard.PdfReader", return_value=reader):
             config = WatchGuardParser().parse("report.pdf")
         self.assertEqual(config.model, "Firebox Example")
+        report = build_report(config, [], "report.pdf")
+        self.assertIn("| Model | `Firebox Example` |", report["technical_commentary"])
         self.assertEqual(
             [(r.id, r.name, r.enabled) for r in config.rules],
             [

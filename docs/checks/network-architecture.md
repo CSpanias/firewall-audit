@@ -15,6 +15,11 @@ Zones are reported with their member interfaces. Address objects and groups
 are recorded by name and supported address fields so policy references can be
 reviewed in context.
 
+For FortiOS exports, the version header's identifier is retained as a platform
+identifier rather than treated as a device model. The `FGVMAZ` identifier is
+displayed as `FortiGate-VM (Azure)`; other identifiers remain uninterpreted
+unless a platform can be established.
+
 ## Review considerations
 
 Confirm that interface roles and zone membership match the intended trust

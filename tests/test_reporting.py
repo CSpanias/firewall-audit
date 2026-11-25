@@ -10,15 +10,19 @@ from contextlib import redirect_stdout
 from html.parser import HTMLParser
 from pathlib import Path
 
+from rich.console import Console
+
 from analysis.fortigate_checks import run_fortigate_checks
 from cli.audit import run_audit_workflow
 from cli.main import build_parser
 from common.finding_definitions import load_finding_definitions
+from common.tables import build_configuration_summary_table
 from models.firewall import FirewallConfig
 from models.rule import FirewallRule
 from parsers.fortigate import FortigateParser
 from reporting.findings import build_report, export_json
 from reporting.html import export_html, render_html
+from reporting.markdown import export_markdown
 from reporting.narrative import build_narratives
 from reporting.sureformat import export_sureformat
 
@@ -172,7 +176,9 @@ class FortiOSReportingTests(unittest.TestCase):
 
     def test_parser_extracts_device_topology_policies_and_services(self) -> None:
         self.assertEqual(self.config.hostname, "edge-fw")
-        self.assertEqual(self.config.model, "FGT60F")
+        self.assertIsNone(self.config.model)
+        self.assertIsNone(self.config.platform)
+        self.assertEqual(self.config.platform_identifier, "FGT60F")
         self.assertEqual(self.config.version, "7.4.11")
         self.assertEqual(self.config.config_build, "2878")
         self.assertEqual(self.config.zones, {"INTERNAL": ["internal"]})
@@ -184,6 +190,51 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertEqual(self.config.interface_details[0].management_services, ["https", "ssh"])
         self.assertEqual(len(self.config.vpns), 2)
         self.assertEqual(self.config.remote_auth_admin_count, 1)
+
+    def test_azure_platform_comes_from_the_fortios_header(self) -> None:
+        self.config_path.write_text(
+            FORTIOS_CONFIG.replace("FGT60F-7.4.11", "FGVMAZ-7.4.11"),
+            encoding="utf-8",
+        )
+        config = FortigateParser().parse(str(self.config_path))
+        report = build_report(config, [], self.config_path.name)
+        commentary = report["technical_commentary"]
+
+        self.assertIsNone(config.model)
+        self.assertEqual(config.platform_identifier, "FGVMAZ")
+        self.assertEqual(report["device"]["platform"], "FortiGate-VM (Azure)")
+        self.assertEqual(report["device"]["platform_identifier"], "FGVMAZ")
+        self.assertIn("| Platform | `FortiGate-VM (Azure)` |", commentary)
+        self.assertIn("against `edge-fw` to identify", commentary)
+        self.assertNotIn("`edge-fw` (Fortinet)", commentary)
+        self.assertNotIn("FGVMAZ", commentary)
+        self.assertIn("FortiGate-VM (Azure)", render_html(report))
+        markdown_path = export_markdown(report, self.directory / "report.md")
+        self.assertIn("| Platform | FortiGate-VM (Azure) |", markdown_path.read_text())
+        output = io.StringIO()
+        Console(file=output, width=120, no_color=True).print(
+            build_configuration_summary_table(config)
+        )
+        self.assertIn("FortiGate-VM (Azure)", output.getvalue())
+        self.assertNotIn("FGVMAZ", output.getvalue())
+
+    def test_unrecognised_header_is_not_guessed_as_an_azure_platform(self) -> None:
+        report = build_report(self.config, [], self.config_path.name)
+
+        self.assertIsNone(report["device"]["platform"])
+        self.assertEqual(report["device"]["platform_identifier"], "FGT60F")
+        self.assertIn("| Platform identifier | `FGT60F` |", report["technical_commentary"])
+        self.assertNotIn("FortiGate-VM (Azure)", report["technical_commentary"])
+
+    def test_missing_header_does_not_infer_a_platform(self) -> None:
+        self.config_path.write_text(
+            FORTIOS_CONFIG.split("\n", 1)[1],
+            encoding="utf-8",
+        )
+        config = FortigateParser().parse(str(self.config_path))
+        self.assertIsNone(config.platform)
+        self.assertIsNone(config.platform_identifier)
+        self.assertIsNone(config.model)
 
     def test_checks_cover_unrestricted_admin_vip_legacy_logging_and_ntp(self) -> None:
         findings = run_fortigate_checks(self.config)
