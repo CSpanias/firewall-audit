@@ -12,6 +12,7 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
+from rich.rule import Rule
 from rich.text import Text
 
 from analysis.cisco_checks import run_cisco_checks
@@ -29,6 +30,8 @@ from reporting.sureformat import export_sureformat
 
 def run_audit_workflow(args: Namespace) -> None:
     """Execute the audit workflow and write structured and HTML reports."""
+    if args.evidence_full and args.evidence is None:
+        raise ValueError("--evidence-full requires --evidence.")
     config_path = Path(args.config).expanduser()
     output_dir = Path(args.output_dir).expanduser()
     valid, message = validate_configuration_file(str(config_path))
@@ -85,7 +88,9 @@ def run_audit_workflow(args: Namespace) -> None:
                 raise ValueError(f"No finding with ID '{args.evidence}' was identified.")
         report = build_report(config, findings, config_path.name, args.assessment_ip)
         evidence = (
-            build_source_evidence(evidence_source, config, selected_findings)
+            build_source_evidence(
+                evidence_source, config, selected_findings, sample=not args.evidence_full
+            )
             if evidence_source is not None
             else []
         )
@@ -133,9 +138,26 @@ def run_audit_workflow(args: Namespace) -> None:
             console.print(Text("No source evidence is available: no findings were identified."))
         for item in evidence:
             console.print()
-            console.rule(Text(f"{item.finding.title} [{item.finding.id}]", style="cyan"))
-            console.print(Text("Selected source lines; other configuration lines are omitted."))
+            title = Text(f"{item.finding.title} [{item.finding.id}]", style="cyan")
+            displayed = []
+            truncated = False
             for number, line in item.lines:
-                console.print(Text(f"{number:>6} | {line}"))
+                text = Text(f"{number:>6} | {line}")
+                if not args.evidence_full and text.cell_len > min(console.width, 120):
+                    text.truncate(min(console.width, 120), overflow="ellipsis")
+                    truncated = True
+                displayed.append(text)
+            width = min(
+                console.width,
+                max(title.cell_len + 4, *(line.cell_len for line in displayed), 0),
+            )
+            console.print(Rule(title), width=width)
+            console.print(Text("Selected source lines; other configuration lines are omitted."))
+            for line in displayed:
+                console.print(line)
             for note in item.notes:
                 console.print(Text(f"Note: {note}"))
+            if truncated:
+                console.print(Text(
+                    "Note: Long lines were truncated; use --evidence-full for complete lines."
+                ))

@@ -25,6 +25,7 @@ _OBJECT_FIELDS = {
     ("firewall", "service", "group"): {"member"},
 }
 _ABSENCE_FINDINGS = {"logging-coverage-gap", "local-admin-auth", "ntp-server-review"}
+_SAMPLE_LINE_LIMIT = 24
 _SENSITIVE_CISCO = re.compile(
     r"\b(?:password|passwd|secret|community|private-key|pre-shared-key|token)\b", re.IGNORECASE
 )
@@ -87,7 +88,8 @@ def _affected_rules(config: FirewallConfig, finding: Finding) -> list[tuple[str,
 
 
 def _fortigate_evidence(
-    lines: list[str], roots: list[_Node], config: FirewallConfig, finding: Finding
+    lines: list[str], roots: list[_Node], config: FirewallConfig, finding: Finding,
+    sample: bool = False,
 ) -> SourceEvidence:
     selected: dict[int, str] = {}
     notes: list[str] = []
@@ -97,6 +99,8 @@ def _fortigate_evidence(
         selected.update(_selected_lines(lines, item or block, fields))
 
     rules = _affected_rules(config, finding)
+    if sample:
+        rules = rules[:1]
     for kind, rule in rules:
         path = ("firewall", "local-in-policy") if kind == "Local-in policy" else (
             "firewall", "policy"
@@ -104,13 +108,23 @@ def _fortigate_evidence(
         for block in _configs(roots, *path):
             for item in _edits(block):
                 if " ".join(item.name) == rule.id:
-                    add(block, item, _POLICY_FIELDS)
+                    fields = _POLICY_FIELDS
+                    if sample and finding.id == "admin-service-vip-policy":
+                        fields = {
+                            "srcintf", "dstintf", "srcaddr", "dstaddr", "srcaddr-negate",
+                            "dstaddr-negate", "service", "action",
+                        }
+                    add(block, item, fields)
 
     addresses = _expand_references(
         [
             reference
             for _, rule in rules
-            for reference in rule.source_addresses + rule.destination_addresses
+            for reference in (
+                rule.destination_addresses
+                if sample
+                else rule.source_addresses + rule.destination_addresses
+            )
         ],
         config.address_groups,
     )
@@ -118,7 +132,14 @@ def _fortigate_evidence(
         [service for _, rule in rules for service in rule.services], config.service_groups
     )
     for path, fields in _OBJECT_FIELDS.items():
+        if sample and path[:2] not in {("firewall", "vip"), ("firewall", "service")}:
+            continue
         names = services if path[:2] == ("firewall", "service") else addresses
+        if sample and finding.id == "admin-service-vip-policy" and path == ("firewall", "vip"):
+            names = names & {
+                name.casefold() for name in finding.data.get("virtual_ips", [])
+                if isinstance(name, str)
+            }
         for block in _configs(roots, *path):
             for item in _edits(block):
                 if " ".join(item.name).casefold() in names:
@@ -155,12 +176,15 @@ def _fortigate_evidence(
         notes.append("Rule names and comments are omitted because free text may be sensitive.")
         for rule in finding.data.get("rules", []):
             if isinstance(rule, dict):
+                if sample and rules and str(rule.get("id")) != rules[0][1].id:
+                    continue
                 for indicator in rule.get("indicators", []):
                     rule_id = _safe_line(str(rule.get("id")))
                     notes.append(f"Parsed indicator for rule {rule_id}: {indicator}")
     if not selected:
         notes.append("No selected source lines were available for this finding.")
-    return SourceEvidence(finding, sorted(selected.items()), notes)
+    ordered = list(selected.items()) if sample else sorted(selected.items())
+    return SourceEvidence(finding, ordered, notes)
 
 
 def _cisco_evidence(lines: list[str], finding: Finding) -> SourceEvidence:
@@ -190,16 +214,39 @@ def _cisco_evidence(lines: list[str], finding: Finding) -> SourceEvidence:
 
 
 def build_source_evidence(
-    source: str, config: FirewallConfig, findings: list[Finding]
+    source: str, config: FirewallConfig, findings: list[Finding], *, sample: bool = False
 ) -> list[SourceEvidence]:
     """Return original selected lines without retaining unrelated configuration fields."""
     lines = source.splitlines()
     if config.vendor.lower() == "fortinet":
         roots = _parse_document(lines)
-        return [_fortigate_evidence(lines, roots, config, finding) for finding in findings]
-    if config.vendor.lower() == "cisco":
-        return [_cisco_evidence(lines, finding) for finding in findings]
-    return [
-        SourceEvidence(finding, [], ["Source excerpts are not available for this vendor."])
-        for finding in findings
-    ]
+        complete = [_fortigate_evidence(lines, roots, config, finding) for finding in findings]
+        selected = (
+            [
+                _fortigate_evidence(lines, roots, config, finding, sample=True)
+                for finding in findings
+            ]
+            if sample
+            else complete
+        )
+    elif config.vendor.lower() == "cisco":
+        complete = [_cisco_evidence(lines, finding) for finding in findings]
+        selected = (
+            [SourceEvidence(item.finding, item.lines[:1], item.notes.copy()) for item in complete]
+            if sample else complete
+        )
+    else:
+        return [
+            SourceEvidence(finding, [], ["Source excerpts are not available for this vendor."])
+            for finding in findings
+        ]
+    if sample:
+        for item, full in zip(selected, complete):
+            item.lines = item.lines[:_SAMPLE_LINE_LIMIT]
+            omitted = len(full.lines) - len(item.lines)
+            if omitted:
+                item.notes.append(
+                    f"Sample only: {omitted} selected source line(s) omitted. "
+                    "Use --evidence-full to show all selected lines."
+                )
+    return selected

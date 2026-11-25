@@ -562,6 +562,75 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("set ntpsync enable", "\n".join(line for _, line in ntp.lines))
         self.assertIn("excerpts alone cannot prove absence", ntp.notes[0])
 
+    def test_evidence_samples_an_affected_policy_and_its_vip(self) -> None:
+        long_address = "source-" + "x" * 150
+        source = FORTIOS_CONFIG.replace(
+            '        set dstaddr "target-group"\n',
+            f'        set dstaddr "target-group"\n        set srcaddr "{long_address}"\n',
+            1,
+        ).replace(
+            "    edit 3\n",
+            '    edit 99\n'
+            '        set srcintf "wan1"\n'
+            '        set dstintf "internal"\n'
+            '        set srcaddr "all"\n'
+            '        set dstaddr "target-group"\n'
+            '        set service "HTTPS"\n'
+            '        set action accept\n'
+            '    next\n'
+            "    edit 3\n",
+            1,
+        )
+        self.config_path.write_text(source, encoding="utf-8")
+        config = FortigateParser().parse(str(self.config_path))
+        finding = next(
+            item for item in run_fortigate_checks(config) if item.id == "admin-service-vip-policy"
+        )
+        sample = build_source_evidence(source, config, [finding], sample=True)[0]
+        complete = build_source_evidence(source, config, [finding])[0]
+        text = "\n".join(line for _, line in sample.lines)
+        self.assertLessEqual(len(sample.lines), 24)
+        self.assertIn("config firewall policy", text)
+        self.assertIn("edit 2", text)
+        self.assertNotIn("edit 99", text)
+        self.assertIn('edit "published-admin"', text)
+        self.assertIn("set extport 443", text)
+        self.assertIn("edit 99", "\n".join(line for _, line in complete.lines))
+        self.assertTrue(any("Sample only" in note for note in sample.notes))
+        for number, line in sample.lines:
+            self.assertEqual(line, source.splitlines()[number - 1])
+
+        args = build_parser().parse_args(
+            ["-C", str(self.config_path), "-O", str(self.directory),
+             "--evidence", "admin-service-vip-policy"]
+        )
+        output = io.StringIO()
+        with patch("cli.audit.console", Console(file=output, width=240, no_color=True)):
+            run_audit_workflow(args)
+        excerpt = output.getvalue().split("Selected source lines; other configuration lines")[1]
+        self.assertIn("Long lines were truncated", excerpt)
+        self.assertNotIn(long_address, excerpt)
+        rule_line = next(
+            line for line in output.getvalue().splitlines() if "[admin-service-vip-policy]" in line
+        )
+        self.assertLessEqual(len(rule_line), 120)
+
+        args.evidence_full = True
+        output = io.StringIO()
+        with patch("cli.audit.console", Console(file=output, width=240, no_color=True)):
+            run_audit_workflow(args)
+        excerpt = output.getvalue().split("Selected source lines; other configuration lines")[1]
+        self.assertIn(long_address, excerpt)
+        self.assertIn("edit 99", excerpt)
+        self.assertNotIn("Sample only", excerpt)
+
+    def test_full_evidence_requires_the_evidence_flag(self) -> None:
+        args = build_parser().parse_args(
+            ["-C", str(self.config_path), "--evidence-full"]
+        )
+        with self.assertRaisesRegex(ValueError, "--evidence-full requires --evidence"):
+            run_audit_workflow(args)
+
     def test_source_evidence_for_admin_auth_omits_passwords(self) -> None:
         self.config.aaa_servers.clear()
         finding = next(

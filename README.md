@@ -33,14 +33,16 @@ firewall-audit -C firewall.conf --output-dir reports
 firewall-audit -C firewall.conf --assessment-ip 192.0.2.10
 firewall-audit -C firewall.conf --evidence
 firewall-audit -C firewall.conf --evidence legacy-service-policy
+firewall-audit -C firewall.conf --evidence legacy-service-policy --evidence-full
 ```
 
 Each run generates a timestamped JSON report and a self-contained HTML report.
 Repeat `--assessment-ip` for multiple testing hosts. Rules whose source or
 destination consists exclusively of those hosts are excluded from findings;
 shared and subnet rules remain in scope.
-Use `--evidence` to display selected original configuration lines for findings,
-or supply a finding ID to display only that finding's evidence.
+Use `--evidence` to display compact samples of selected configuration lines, or
+supply a finding ID to display only that finding's evidence. Add
+`--evidence-full` to show all selected lines without sample truncation.
 
 The HTML report works offline and provides an executive summary, technical
 commentary with supporting evidence, and remediation guidance. Each section

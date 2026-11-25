@@ -156,6 +156,9 @@ class CiscoParserTests(unittest.TestCase):
             self.assertEqual(line, source_lines[number - 1])
             self.assertTrue(line.startswith("access-list EDGE"))
         self.assertIn("not included", evidence.notes[0])
+        sample = build_source_evidence(CISCO_CONFIG, config, [finding], sample=True)[0]
+        self.assertEqual(sample.lines, evidence.lines[:1])
+        self.assertTrue(any("Sample only" in note for note in sample.notes))
 
     def test_cisco_evidence_omits_acl_lines_with_sensitive_fields(self) -> None:
         source = "access-list EDGE extended permit ip any any secret value\n"

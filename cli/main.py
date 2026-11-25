@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print selected source evidence for all findings or a specific finding ID.",
     )
     parser.add_argument(
+        "--evidence-full",
+        action="store_true",
+        help="Show all selected evidence lines; use together with --evidence.",
+    )
+    parser.add_argument(
         "--csacyber",
         action="store_true",
         help=argparse.SUPPRESS,
