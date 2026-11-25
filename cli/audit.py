@@ -23,6 +23,7 @@ from common.vendor_detection import VendorDetector
 from parsers.factory import ParserFactory
 from reporting.findings import build_report, export_json
 from reporting.html import export_html
+from reporting.source_evidence import build_source_evidence
 from reporting.sureformat import export_sureformat
 
 
@@ -54,7 +55,16 @@ def run_audit_workflow(args: Namespace) -> None:
         progress.advance(task)
 
         progress.update(task, description=f"Parsing {vendor} configuration")
+        evidence_source = (
+            config_path.read_text(encoding="utf-8", errors="replace")
+            if args.evidence is not None and vendor != "watchguard"
+            else None
+        )
         config = parser.parse(str(config_path))
+        if evidence_source is not None and evidence_source != config_path.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            raise ValueError("The configuration changed during parsing; rerun the assessment.")
         for message in config.parse_warnings:
             warn(message)
         progress.advance(task)
@@ -68,7 +78,17 @@ def run_audit_workflow(args: Namespace) -> None:
             findings = []
         else:
             raise ValueError(f"No analysis workflow is available for detected vendor: {vendor}.")
+        selected_findings = findings
+        if args.evidence not in (None, "all"):
+            selected_findings = [finding for finding in findings if finding.id == args.evidence]
+            if not selected_findings:
+                raise ValueError(f"No finding with ID '{args.evidence}' was identified.")
         report = build_report(config, findings, config_path.name, args.assessment_ip)
+        evidence = (
+            build_source_evidence(evidence_source, config, selected_findings)
+            if evidence_source is not None
+            else []
+        )
 
         output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -84,9 +104,9 @@ def run_audit_workflow(args: Namespace) -> None:
             if unmapped:
                 warn(
                     f"{unmapped} finding(s) have no CSA Cyber SureFormat mapping and were "
-                    "not included in the XML. Add sureformat_id to their YAML definitions."
+                    "not included as separate XML items."
                 )
-            success(f"Exported {exported} mapped CSA Cyber finding(s).")
+            success(f"Exported {exported} CSA Cyber item(s), including the firewall review.")
         progress.advance(task)
 
     console.print()
@@ -100,14 +120,22 @@ def run_audit_workflow(args: Namespace) -> None:
             warn("Assessment IP matching is unavailable because rule addresses were not parsed.")
         else:
             console.print(
-                f"Assessment IP context: {len(context['matches'])} explicit "
-                "rule reference match(es)."
+                f"Assessment host exclusions: {len(context['excluded_rules'])} dedicated rule(s)."
             )
-            if context["unresolved_references"]:
-                warn("Some address references could not be resolved; see the report for details.")
     if config.checks_supported:
         success(f"Assessment complete: {len(findings)} finding(s) identified.")
     else:
         warn("Policy inventory complete; no automated security checks were run.")
     for path in report_paths:
         console.print(Text(f"Report written: {path}", style="green"))
+    if args.evidence is not None:
+        if not evidence:
+            console.print(Text("No source evidence is available: no findings were identified."))
+        for item in evidence:
+            console.print()
+            console.rule(Text(f"{item.finding.title} [{item.finding.id}]", style="cyan"))
+            console.print(Text("Selected source lines; other configuration lines are omitted."))
+            for number, line in item.lines:
+                console.print(Text(f"{number:>6} | {line}"))
+            for note in item.notes:
+                console.print(Text(f"Note: {note}"))

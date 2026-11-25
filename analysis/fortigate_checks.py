@@ -2,7 +2,7 @@
 
 import ipaddress
 
-from analysis.assessment_context import find_temporary_access
+from analysis.assessment_context import exclude_assessment_rules, find_temporary_access
 from analysis.services import LEGACY_NAMES, LEGACY_PORTS, matching_rule_services
 from common.finding_definitions import load_finding_definitions
 from common.text import number_as_words
@@ -99,6 +99,7 @@ def run_fortigate_checks(
     config: FirewallConfig, assessment_ips: list[str] | None = None
 ) -> list[Finding]:
     """Run the currently supported FortiGate review checks."""
+    config, _ = exclude_assessment_rules(config, assessment_ips)
     definitions = load_finding_definitions()
     findings: list[Finding] = []
     enabled_rules = [

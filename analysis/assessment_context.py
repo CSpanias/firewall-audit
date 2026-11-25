@@ -2,11 +2,13 @@
 
 import ipaddress
 import re
+from dataclasses import replace
 from typing import Any
 
 from common.finding_definitions import load_finding_definitions
 from models.finding import Finding
 from models.firewall import FirewallConfig
+from models.rule import FirewallRule
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 AddressRange = tuple[Address, Address, str]
@@ -91,8 +93,69 @@ def _resolve(
     return ([result], set()) if result else ([], {reference})
 
 
+def _dedicated_reference(
+    reference: str, config: FirewallConfig, addresses: set[Address], visited: set[str]
+) -> bool:
+    key = reference.casefold()
+    if key in visited:
+        return False
+    group = next((name for name in config.address_groups if name.casefold() == key), None)
+    if group is not None:
+        if any(name.casefold() == key for name in config.excluded_address_groups):
+            return False
+        members = config.address_groups[group]
+        return bool(members) and all(
+            _dedicated_reference(member, config, addresses, visited | {key})
+            for member in members
+        )
+    ranges, unresolved = _resolve(reference, config, set())
+    return bool(ranges) and not unresolved and all(
+        kind == "host" and first == last and first in addresses for first, last, kind in ranges
+    )
+
+
+def _dedicated_rule(rule: FirewallRule, config: FirewallConfig, addresses: set[Address]) -> bool:
+    if any(
+        str(rule.metadata.get(key, "")).lower() == "enable"
+        for key in ("srcaddr-negate", "dstaddr-negate")
+    ):
+        return False
+    return any(
+        references
+        and all(
+            _dedicated_reference(reference, config, addresses, set()) for reference in references
+        )
+        for references in (rule.source_addresses, rule.destination_addresses)
+    )
+
+
+def exclude_assessment_rules(
+    config: FirewallConfig, addresses: list[str] | None
+) -> tuple[FirewallConfig, list[dict[str, str]]]:
+    """Exclude rules with an entirely assessment-host-only source or destination."""
+    if not addresses or not config.checks_supported:
+        return config, []
+    ips = {ipaddress.ip_address(value) for value in addresses}
+    if any(isinstance(ip, ipaddress.IPv6Address) and ip.scope_id is not None for ip in ips):
+        raise ValueError("Assessment IPv6 addresses cannot include a scope ID.")
+    excluded = []
+    filtered: list[list[FirewallRule]] = []
+    for kind, rules in (
+        ("ACL entry" if config.vendor.lower() == "cisco" else "Firewall policy", config.rules),
+        ("Local-in policy", config.local_in_rules),
+    ):
+        retained = []
+        for rule in rules:
+            if _dedicated_rule(rule, config, ips):
+                excluded.append({"rule_type": kind, "rule_id": rule.id})
+            else:
+                retained.append(rule)
+        filtered.append(retained)
+    return replace(config, rules=filtered[0], local_in_rules=filtered[1]), excluded
+
+
 def build_assessment_context(config: FirewallConfig, addresses: list[str]) -> dict[str, Any]:
-    """Record possible explicit policy matches without changing any findings."""
+    """Record assessment hosts, dedicated exclusions and possible policy matches."""
     ips = list(dict.fromkeys(ipaddress.ip_address(value) for value in addresses))
     if any(isinstance(ip, ipaddress.IPv6Address) and ip.scope_id is not None for ip in ips):
         raise ValueError("Assessment IPv6 addresses cannot include a scope ID.")
@@ -143,8 +206,19 @@ def build_assessment_context(config: FirewallConfig, addresses: list[str]) -> di
                                 "action": rule.action,
                             }
                         )
+    _, excluded = exclude_assessment_rules(config, addresses)
+    host_objects = {
+        str(ip): [
+            name
+            for name in config.address_definitions
+            if _dedicated_reference(name, config, {ip}, set())
+        ]
+        for ip in ips
+    }
     return {
         "addresses": [str(address) for address in ips],
+        "host_objects": host_objects,
+        "excluded_rules": excluded,
         "matches": matches,
         "unresolved_references": unresolved,
         "addresses_available": "address_objects" not in config.unavailable_inventory,

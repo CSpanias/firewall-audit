@@ -32,6 +32,8 @@ reference a host supplied using `--assessment-ip`. A matching subnet alone is
 not treated as proof that a rule is for testing. Evidence includes source
 references and supported resolved scopes, services, the configured schedule
 and the reason for review. Cisco checks are limited to bound ACLs.
+Rules dedicated exclusively to supplied assessment hosts are excluded from
+all automated rule findings; shared rules are still reviewed.
 
 These are indicators for owner review, not proof that access is temporary,
 expired or no longer required. Creation dates, ownership and the effective

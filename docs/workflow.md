@@ -10,6 +10,8 @@ in approved storage.
 firewall-audit --config firewall.conf
 firewall-audit -C firewall.conf --output-dir reports
 firewall-audit -C firewall.conf --assessment-ip 192.0.2.10
+firewall-audit -C firewall.conf --evidence
+firewall-audit -C firewall.conf --evidence legacy-service-policy
 ```
 
 The workflow validates the input, detects the vendor, parses supported
@@ -17,15 +19,27 @@ configuration sections, runs applicable review checks, and writes timestamped
 reports. Progress, findings, and parsing limitations are shown in the terminal.
 
 Use `--assessment-ip` for a known assessment host; repeat the flag to supply
-multiple IPv4 or IPv6 addresses. The report lists matching explicit, statically
-parsed source and destination references, including hosts, subnets, ranges and
-supported address groups, for firewall and local-in policies. It also lists
-references that could not be resolved. Wildcards, negated address references,
-dynamic objects, address group exclusions, and VIP/NAT mappings are not
-evaluated for this context.
-Matches do not establish that a rule is exclusive to testing or that traffic is
-permitted or reachable. No findings or severities are suppressed or changed.
-Firebox PDF inventories do not include rule addresses and cannot be matched.
+multiple IPv4 or IPv6 addresses. Rules are excluded from automated findings
+only when an entire source or destination consists of explicitly resolved
+individual assessment hosts, including supported nested address groups.
+Rules shared with other hosts, subnets or ranges remain in scope. Negated
+addresses, wildcards, unresolved or dynamic objects, groups with exclusions,
+and VIP/NAT mappings cannot establish a dedicated host scope. The structured
+JSON retains matching and unresolved references and excluded rule identifiers
+for auditing; the commentary contains only a concise note. Inventory counts
+continue to describe the complete configuration. Firebox PDF inventories do
+not include rule addresses and cannot be evaluated for exclusions.
+
+Use `--evidence` to print selected original source lines with line numbers,
+grouped by finding. Add a finding ID to limit the display to that finding.
+FortiOS output omits unselected configuration fields, including passwords,
+secrets and free-text comments; control characters are replaced. Cisco output
+shows matching ACL lines but not referenced object definitions, and may contain
+sensitive values. Absence-based
+observations are explicitly labelled because an excerpt cannot prove absence.
+The evidence is not added to the report files. Selected source lines can still
+contain sensitive network details or other sensitive values; review screenshots
+and share them only through approved channels.
 
 ## Output files
 

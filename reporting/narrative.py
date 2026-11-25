@@ -101,11 +101,10 @@ def _prose_list(values: list[str]) -> str:
 def _executive_summary(report: dict[str, Any]) -> str:
     device = report.get("device", {})
     hostname = _text(device.get("hostname") or "the supplied firewall")
-    vendor = _text(device.get("vendor") or "Unknown vendor")
     if not report.get("checks_run", True):
         return "\n\n".join(
             [
-                f"A configuration inventory was generated for {hostname} ({vendor}). "
+                f"A configuration inventory was generated for {hostname}. "
                 "The supplied report was not assessed using automated security checks.",
                 "The inventory is limited to the information described in the technical "
                 "commentary and cannot be used to conclude whether the firewall controls "
@@ -115,9 +114,17 @@ def _executive_summary(report: dict[str, Any]) -> str:
         )
 
     summary = [
-        f"A firewall configuration review was performed against {hostname} ({vendor}) "
+        f"A firewall configuration review was performed against {hostname} "
         "to identify settings that could increase exposure to unauthorised access, "
-        "weaken network segmentation or reduce the effectiveness of security controls."
+        "weaken network segmentation or reduce the effectiveness of security controls. "
+        "This review was limited to a static assessment of the firewall configuration. "
+        "Reachability of exposed services, operational effectiveness of controls and "
+        "the business justification for individual rules were not independently validated."
+        + (
+            " The scope and parsing limitations are described in the technical commentary."
+            if report.get("parse_warnings")
+            else ""
+        )
     ]
     destinations = report.get("logging", {}).get("destinations", {})
     logging_configured = str(device.get("vendor", "")).lower() == "fortinet" and any(
@@ -128,18 +135,27 @@ def _executive_summary(report: dict[str, Any]) -> str:
         "While centralised logging destinations were configured, log collection, coverage "
         "and retention could not be independently verified."
     )
+    ntp = report.get("monitoring", {}).get("ntp", {})
+    time_source_configured = (
+        str(device.get("vendor", "")).lower() == "fortinet"
+        and str(ntp.get("ntpsync", "")).lower() == "enable"
+        and bool(ntp.get("servers"))
+    )
+    positive_observations = int(logging_configured) + int(time_source_configured)
     findings = report.get("findings", [])
     if findings:
-        summary[0] += (
-            " Although a centralised logging destination was configured, the assessment "
-            "highlighted areas requiring further review."
-            if logging_configured
-            else " The assessment highlighted areas requiring further review."
-        )
-        logging_observation = (
-            "The collection, coverage and retention of centralised logs "
-            "could not be independently verified."
-        )
+        if positive_observations:
+            subject = (
+                "a positive observation was"
+                if positive_observations == 1
+                else "a number of positive observations were"
+            )
+            summary[0] += (
+                f" Although {subject} identified, the assessment highlighted areas "
+                "requiring further review."
+            )
+        else:
+            summary[0] += " The assessment highlighted areas requiring further review."
         definitions = load_finding_definitions()
         ordered = sorted(
             findings,
@@ -213,16 +229,6 @@ def _executive_summary(report: dict[str, Any]) -> str:
             "reassess controls periodically."
         )
 
-    summary.append(
-        "This review was limited to a static assessment of the firewall configuration. "
-        "Reachability of exposed services, operational effectiveness of controls and "
-        "the business justification for individual rules were not independently validated."
-        + (
-            " The scope and parsing limitations are described in the technical commentary."
-            if report.get("parse_warnings")
-            else ""
-        )
-    )
     return "\n\n".join(summary)
 
 
@@ -355,72 +361,25 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     ]
     context = report.get("assessment_context")
     if context:
-        section = [
-            "### Assessment IP context",
-            "The following IP addresses were supplied as assessment hosts: "
-            + _prose_list(context["addresses"])
-            + ". Findings have not been excluded or downgraded on this basis.",
-        ]
-        if not context["addresses_available"]:
-            section.append(
-                "The supplied configuration did not provide parsed rule addresses, "
-                "so assessment IP matches could not be evaluated."
-            )
-        elif context["matches"]:
-            section.append(
-                "The table identifies explicit address references containing an assessment IP. "
-                "A match does not establish that the rule is solely for testing, that it "
-                "permits traffic, or that the traffic is reachable."
-            )
-            section.append(
-                _table(
-                    [
-                        "Assessment IP",
-                        "Rule type",
-                        "Rule",
-                        "Side",
-                        "Address reference",
-                        "Match",
-                        "Status",
-                        "Action",
-                    ],
-                    [
-                        [
-                            item["address"],
-                            item["rule_type"],
-                            item["rule_id"],
-                            item["direction"],
-                            item["reference"],
-                            item["match_types"],
-                            "Enabled" if item["enabled"] else "Disabled",
-                            item["action"],
-                        ]
-                        for item in context["matches"]
-                    ],
-                )
+        hosts = []
+        for address in context["addresses"]:
+            names = context.get("host_objects", {}).get(address, [])
+            hosts.append(f"{_prose_list(names)} ({_code(address)})" if names else _code(address))
+        host_list = ", ".join(hosts[:-1]) + " and " + hosts[-1] if len(hosts) > 1 else hosts[0]
+        note = f"**Note:** The following assessment hosts were supplied: {host_list}. "
+        if not report.get("checks_run", True) or not context["addresses_available"]:
+            note += "Dedicated rules could not be evaluated for exclusion."
+        elif context["excluded_rules"]:
+            note += (
+                "Rules dedicated to these hosts were excluded from automated findings; "
+                "shared and subnet rules remained in scope."
             )
         else:
-            section.append(
-                "No explicit parsed rule address references matched the supplied IPs. "
-                "This does not establish that the hosts have no access."
+            note += (
+                "No dedicated rules were identified for exclusion; "
+                "shared and subnet rules remained in scope."
             )
-        if context["addresses_available"]:
-            section.append(
-                "Wildcard addresses, negated address references, dynamic objects, address "
-                "group exclusions and VIP/NAT mappings are not evaluated for these matches."
-            )
-        if context["unresolved_references"]:
-            section.append("The following address references could not be resolved:")
-            section.append(
-                _table(
-                    ["Rule type", "Rule", "Side", "Unresolved reference"],
-                    [
-                        [item["rule_type"], item["rule_id"], item["direction"], item["reference"]]
-                        for item in context["unresolved_references"]
-                    ],
-                )
-            )
-        commentary.append("\n\n".join(section))
+        commentary.append(note)
     if report.get("parse_warnings"):
         commentary.append(
             "### Parsing limitations\n\n"
@@ -429,16 +388,6 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
     if not findings and report.get("checks_run", True):
         commentary.append("No findings were identified by the applicable checks.")
     grouped: dict[str, list[dict[str, Any]]] = {}
-    context_objects = set()
-    if context:
-        labels = {
-            "ACL entry": "Rule",
-            "Firewall policy": "Policy",
-            "Local-in policy": "Local-in policy",
-        }
-        context_objects = {
-            f"{labels[match['rule_type']]} {match['rule_id']}" for match in context["matches"]
-        }
     for index, finding in enumerate(findings):
         key = finding.get("id") or f"unnamed-{index}"
         grouped.setdefault(key, []).append(finding)
@@ -462,12 +411,6 @@ def build_narratives(report: dict[str, Any]) -> dict[str, str]:
         affected = list(
             dict.fromkeys(item for entry in group for item in entry.get("affected_objects", []))
         )
-        if context_objects.intersection(affected):
-            sections.append(
-                "One or more affected rules include an address scope containing a supplied "
-                "assessment IP. The assessment IP context table identifies the matching "
-                "rules and address references."
-            )
         if key == "broad-allow-rule":
             entries = []
             for entry in group:

@@ -1,6 +1,7 @@
 schema_version: 1
 findings:
   broad-allow-rule:
+    sureformat_id: SC-1831
     title: Allow rule has unrestricted source and destination
     commentary_title: Policies with Unrestricted Source and Destination
     category: access-control
@@ -72,8 +73,9 @@ findings:
       The configured services and virtual IPs do not establish the purpose of the
       mapped systems or confirm that they are externally reachable.
     executive_summary: >-
-      Firewall policies permitted services commonly used for system administration
-      to assets behind public or WAN-facing virtual addresses. Where accessible
+      Firewall policies permitted connections to systems that may be accessible
+      from outside the organisation using services commonly associated with
+      system administration. Where accessible
       from untrusted networks, these services may increase exposure to credential
       attacks or exploitation of vulnerable systems.
     recommendation: >-
@@ -141,6 +143,7 @@ findings:
       - title: "NIST SP 800-92: Guide to Computer Security Log Management"
         url: https://csrc.nist.gov/pubs/sp/800/92/final
   policy-logging-gap:
+    sureformat_id: SC-9974
     title: Some enabled policies explicitly disable traffic logging
     commentary_title: Policy Traffic Logging
     category: logging

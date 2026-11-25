@@ -8,10 +8,13 @@ from unittest.mock import patch
 
 from analysis.cisco_checks import run_cisco_checks
 from common.vendor_detection import VendorDetector
+from models.finding import Finding
+from models.firewall import FirewallConfig
 from parsers.cisco import CiscoParser
 from parsers.watchguard import WatchGuardParser
 from reporting.findings import build_report
 from reporting.html import render_html
+from reporting.source_evidence import build_source_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -107,30 +110,62 @@ class CiscoParserTests(unittest.TestCase):
 
     def test_assessment_ip_resolves_nested_cisco_address_objects(self) -> None:
         config = CiscoParser().parse(str(self.path))
-        findings = run_cisco_checks(config)
+        findings = run_cisco_checks(config, ["10.1.1.1"])
         report = build_report(config, findings, self.path.name, ["10.1.1.1"])
         matches = report["assessment_context"]["matches"]
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["rule_type"], "ACL entry")
         self.assertEqual(matches[0]["direction"], "Destination")
         self.assertEqual(matches[0]["reference"], "targets")
-        unannotated = build_report(config, findings, self.path.name)
+        unannotated = build_report(config, run_cisco_checks(config), self.path.name)
         self.assertNotIn("assessment_context", unannotated)
-        self.assertEqual(report["findings"], unannotated["findings"])
+        self.assertIn("legacy-service-policy", [item["id"] for item in unannotated["findings"]])
+        legacy = next(item for item in findings if item.id == "legacy-service-policy")
+        self.assertNotIn(f"Rule {config.rules[0].id}", legacy.affected_objects)
+        self.assertEqual(
+            report["assessment_context"]["excluded_rules"][0]["rule_type"], "ACL entry"
+        )
 
     def test_temporary_access_only_flags_enabled_bound_cisco_entries(self) -> None:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(
+                "object-group network shared-test-hosts\n"
+                " network-object host 10.1.1.1\n"
+                " network-object host 10.1.1.2\n"
                 "access-list EDGE extended permit ip host 10.1.1.1 any\n"
+                "access-list EDGE extended permit ip object-group shared-test-hosts any\n"
                 "access-list UNUSED extended permit ip host 10.1.1.1 any\n"
                 "access-list EDGE extended deny ip host 10.1.1.1 any\n"
             )
         config = CiscoParser().parse(str(self.path))
         findings = run_cisco_checks(config, ["10.1.1.1"])
         temporary = next(item for item in findings if item.id == "temporary-access-review")
-        self.assertEqual(len(temporary.affected_objects), 2)
+        self.assertEqual(len(temporary.affected_objects), 1)
         self.assertTrue(all("EDGE" in rule for rule in temporary.affected_objects))
-        self.assertEqual(len(temporary.data["rules"]), 2)
+        self.assertEqual(len(temporary.data["rules"]), 1)
+
+    def test_cisco_evidence_uses_the_original_acl_line(self) -> None:
+        config = CiscoParser().parse(str(self.path))
+        finding = next(
+            item for item in run_cisco_checks(config) if item.id == "legacy-service-policy"
+        )
+        evidence = build_source_evidence(CISCO_CONFIG, config, [finding])[0]
+        source_lines = CISCO_CONFIG.splitlines()
+        self.assertTrue(evidence.lines)
+        for number, line in evidence.lines:
+            self.assertEqual(line, source_lines[number - 1])
+            self.assertTrue(line.startswith("access-list EDGE"))
+        self.assertIn("not included", evidence.notes[0])
+
+    def test_cisco_evidence_omits_acl_lines_with_sensitive_fields(self) -> None:
+        source = "access-list EDGE extended permit ip any any secret value\n"
+        finding = Finding(
+            id="test", title="Test", severity="info", description="",
+            affected_objects=["Rule EDGE / line 1"],
+        )
+        evidence = build_source_evidence(source, FirewallConfig(vendor="Cisco"), [finding])[0]
+        self.assertFalse(evidence.lines)
+        self.assertTrue(any("may contain sensitive material" in note for note in evidence.notes))
 
 
 class _Page:
@@ -163,7 +198,7 @@ Firewall Policies Details
         self.assertIn("| Model | Firebox Example |", report["technical_commentary"])
         report_with_context = build_report(config, [], "report.pdf", ["192.0.2.1"])
         self.assertIn(
-            "assessment IP matches could not be evaluated",
+            "Dedicated rules could not be evaluated for exclusion",
             report_with_context["technical_commentary"],
         )
         self.assertEqual(

@@ -6,7 +6,7 @@ from typing import Any
 
 
 def export_sureformat(report: dict[str, Any], filepath: Path) -> tuple[Path, int, int]:
-    """Write findings that have an explicit SureFormat vulnerability mapping."""
+    """Write the firewall review and findings with explicit SureFormat mappings."""
     root = ET.Element("items", source="SureFormat", version="1.0.0")
     device = report.get("device", {})
     item = ET.SubElement(
@@ -21,14 +21,24 @@ def export_sureformat(report: dict[str, Any], filepath: Path) -> tuple[Path, int
     )
     vulnerabilities = ET.SubElement(service, "vulnerabilities")
 
-    exported = 0
+    review = ET.SubElement(vulnerabilities, "vulnerability", id="SC-3393")
+    review_information = ET.SubElement(review, "information")
+    sections = ["Firewall Configuration Review"]
+    for key, title in (
+        ("executive_summary", "Executive Summary"),
+        ("technical_commentary", "Technical Commentary"),
+        ("remediation_guidance", "Remediation Guidance"),
+    ):
+        if report.get(key):
+            sections.append(f"{title}\n\n{report[key]}")
+    review_information.text = "\n\n".join(sections)
+    mapped = {"SC-3393": review_information}
     unmapped = 0
     for finding in report.get("findings", []):
         vulnerability_id = finding.get("sureformat_id")
         if not vulnerability_id:
             unmapped += 1
             continue
-        vulnerability = ET.SubElement(vulnerabilities, "vulnerability", id=vulnerability_id)
         details = [
             finding.get("title", ""),
             finding.get("description", ""),
@@ -36,12 +46,17 @@ def export_sureformat(report: dict[str, Any], filepath: Path) -> tuple[Path, int
             f"Affected: {', '.join(finding.get('affected_objects', []))}",
             f"Recommendation: {finding.get('recommendation', '')}",
         ]
-        ET.SubElement(vulnerability, "information").text = "\n\n".join(
-            detail for detail in details if detail
-        )
-        exported += 1
+        text = "\n\n".join(detail for detail in details if detail)
+        if vulnerability_id in mapped:
+            information = mapped[vulnerability_id]
+            information.text = f"{information.text or ''}\n\n{text}"
+        else:
+            vulnerability = ET.SubElement(vulnerabilities, "vulnerability", id=vulnerability_id)
+            information = ET.SubElement(vulnerability, "information")
+            information.text = text
+            mapped[vulnerability_id] = information
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="    ")
     tree.write(filepath, encoding="utf-8", xml_declaration=True)
-    return filepath, exported, unmapped
+    return filepath, len(mapped), unmapped

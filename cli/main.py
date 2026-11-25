@@ -61,7 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=_assessment_ip,
         default=[],
         metavar="IP",
-        help="Identify an assessment host IP for rule context; may be specified more than once.",
+        help="Exclude rules dedicated to an assessment host; may be specified more than once.",
+    )
+    parser.add_argument(
+        "--evidence",
+        nargs="?",
+        const="all",
+        metavar="FINDING_ID",
+        help="Print selected source evidence for all findings or a specific finding ID.",
     )
     parser.add_argument(
         "--csacyber",

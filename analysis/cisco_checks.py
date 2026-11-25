@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 from analysis.any_any import find_unrestricted_allow_rules
-from analysis.assessment_context import find_temporary_access
+from analysis.assessment_context import exclude_assessment_rules, find_temporary_access
 from analysis.services import LEGACY_NAMES, LEGACY_PORTS, matching_rule_services
 from common.finding_definitions import load_finding_definitions
 from models.finding import Finding
@@ -14,6 +14,7 @@ def run_cisco_checks(
     config: FirewallConfig, assessment_ips: list[str] | None = None
 ) -> list[Finding]:
     """Review enabled, bound ACL entries without claiming runtime reachability."""
+    config, _ = exclude_assessment_rules(config, assessment_ips)
     bound = [rule for rule in config.rules if rule.metadata.get("bindings")]
     findings = find_unrestricted_allow_rules(replace(config, rules=bound))
     legacy = [

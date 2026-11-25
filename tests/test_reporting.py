@@ -9,10 +9,15 @@ import xml.etree.ElementTree as ET
 from contextlib import redirect_stderr, redirect_stdout
 from html.parser import HTMLParser
 from pathlib import Path
+from unittest.mock import patch
 
 from rich.console import Console
 
-from analysis.assessment_context import build_assessment_context, find_temporary_access
+from analysis.assessment_context import (
+    build_assessment_context,
+    exclude_assessment_rules,
+    find_temporary_access,
+)
 from analysis.fortigate_checks import run_fortigate_checks
 from cli.audit import run_audit_workflow
 from cli.main import build_parser
@@ -25,6 +30,7 @@ from reporting.findings import build_report, export_json
 from reporting.html import export_html, render_html
 from reporting.markdown import export_markdown
 from reporting.narrative import build_narratives
+from reporting.source_evidence import build_source_evidence
 from reporting.sureformat import export_sureformat
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -237,7 +243,7 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIsNone(config.platform_identifier)
         self.assertIsNone(config.model)
 
-    def test_assessment_ip_flag_annotates_a_real_policy_without_excluding_findings(self) -> None:
+    def test_assessment_ip_excludes_dedicated_policy_but_not_shared_policies(self) -> None:
         config_text = FORTIOS_CONFIG.replace(
             'config firewall address\n',
             'config firewall address\n'
@@ -250,6 +256,17 @@ class FortiOSReportingTests(unittest.TestCase):
         ).replace(
             '        set srcaddr "all"\n',
             '        set srcaddr "assessment-host" "other-host"\n',
+            1,
+        ).replace(
+            "    edit 2\n",
+            '    edit 50\n'
+            '        set srcaddr "assessment-host"\n'
+            '        set dstaddr "all"\n'
+            '        set service "ALL"\n'
+            '        set action accept\n'
+            '        set logtraffic disable\n'
+            '    next\n'
+            "    edit 2\n",
             1,
         )
         self.config_path.write_text(config_text, encoding="utf-8")
@@ -275,9 +292,18 @@ class FortiOSReportingTests(unittest.TestCase):
                 (item["rule_id"], item["direction"], item["reference"])
                 for item in context["matches"]
             ],
-            [("1", "Source", "assessment-host"), ("3", "Source", "internal-net")],
+            [
+                ("1", "Source", "assessment-host"),
+                ("50", "Source", "assessment-host"),
+                ("3", "Source", "internal-net"),
+            ],
+        )
+        self.assertEqual(
+            context["excluded_rules"], [{"rule_type": "Firewall policy", "rule_id": "50"}]
         )
         self.assertIn("legacy-service-policy", [item["id"] for item in report["findings"]])
+        logging = next(item for item in report["findings"] if item["id"] == "policy-logging-gap")
+        self.assertEqual(logging["affected_objects"], ["Policy 2"])
         temporary = next(
             item for item in report["findings"] if item["id"] == "temporary-access-review"
         )
@@ -287,15 +313,12 @@ class FortiOSReportingTests(unittest.TestCase):
             temporary["evidence"]["rules"][0]["source_address_scopes"],
             ["assessment-host: 10.1.0.35", "other-host: 10.1.0.26"],
         )
+        self.assertIn("`assessment-host` (`10.1.0.35`)", report["technical_commentary"])
         self.assertIn(
-            "| 10.1.0.35 | Firewall policy | 1 | Source | assessment-host |",
-            report["technical_commentary"],
+            "Rules dedicated to these hosts were excluded", report["technical_commentary"]
         )
-        self.assertIn(
-            "One or more affected rules include an address scope containing a supplied "
-            "assessment IP.",
-            report["technical_commentary"],
-        )
+        self.assertNotIn("### Assessment IP context", report["technical_commentary"])
+        self.assertNotIn("Unresolved reference", report["technical_commentary"])
         self.assertIn("other-host: 10.1.0.26", report["technical_commentary"])
         self.assertNotIn("expired access", report["technical_commentary"])
         self.assertIn(
@@ -402,18 +425,48 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("## Executive Summary", markdown["all"])
         self.assertIn("## Remediation Guidance", markdown["all"])
 
-    def test_sureformat_export_only_includes_explicitly_mapped_findings(self) -> None:
+    def test_sureformat_includes_review_and_supported_findings(self) -> None:
         findings = run_fortigate_checks(self.config)
         report = build_report(self.config, findings, self.config_path.name)
-        report["findings"][0]["sureformat_id"] = "SC-1234"
 
         xml_path, exported, unmapped = export_sureformat(report, self.directory / "report.xml")
         root = ET.parse(xml_path).getroot()
         mapped = root.findall(".//vulnerability")
 
-        self.assertEqual(exported, 1)
-        self.assertEqual(unmapped, len(findings) - 1)
-        self.assertEqual([item.attrib["id"] for item in mapped], ["SC-1234"])
+        self.assertEqual(exported, 3)
+        self.assertEqual(unmapped, len(findings) - 2)
+        self.assertEqual(
+            [item.attrib["id"] for item in mapped], ["SC-3393", "SC-1831", "SC-9974"]
+        )
+        review = mapped[0].findtext("information")
+        self.assertIn("Firewall Configuration Review", review)
+        self.assertIn(report["executive_summary"], review)
+        self.assertIn(report["technical_commentary"], review)
+        self.assertIn(report["remediation_guidance"], review)
+
+    def test_sureformat_always_includes_review_and_merges_duplicate_mappings(self) -> None:
+        report = {
+            "device": {"hostname": "edge-fw"},
+            "findings": [
+                {"sureformat_id": "SC-1831", "title": "First", "affected_objects": ["Policy 1"]},
+                {"sureformat_id": "SC-1831", "title": "Second", "affected_objects": ["Policy 2"]},
+                {"sureformat_id": "SC-3393", "title": "Additional review context"},
+                {"id": "temporary-access-review", "title": "Potential temporary access"},
+            ],
+        }
+        xml_path, exported, unmapped = export_sureformat(report, self.directory / "report.xml")
+        vulnerabilities = ET.parse(xml_path).getroot().findall(".//vulnerability")
+        self.assertEqual([item.attrib["id"] for item in vulnerabilities], ["SC-3393", "SC-1831"])
+        self.assertEqual((exported, unmapped), (2, 1))
+        self.assertIn("Additional review context", vulnerabilities[0].findtext("information"))
+        self.assertIn("Policy 1", vulnerabilities[1].findtext("information"))
+        self.assertIn("Policy 2", vulnerabilities[1].findtext("information"))
+
+        report["findings"] = []
+        xml_path, exported, unmapped = export_sureformat(report, self.directory / "empty.xml")
+        ids = [item.attrib["id"] for item in ET.parse(xml_path).findall(".//vulnerability")]
+        self.assertEqual(ids, ["SC-3393"])
+        self.assertEqual((exported, unmapped), (1, 0))
 
     def test_cli_defaults_to_json_and_html(self) -> None:
         arguments = build_parser().parse_args(
@@ -460,6 +513,83 @@ class FortiOSReportingTests(unittest.TestCase):
         }
         self.assertEqual(suffixes, {".html", ".xml"})
 
+    def test_evidence_flag_prints_only_selected_finding_and_omits_secrets(self) -> None:
+        self.config_path.write_text(
+            FORTIOS_CONFIG.replace(
+                '        set srcintf "wan1"\n',
+                '        set password "policy-secret"\n'
+                '        set comments "sensitive-comment"\n'
+                '        set srcintf "wan1"\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        args = build_parser().parse_args(
+            [
+                "-C", str(self.config_path), "-O", str(self.directory),
+                "--evidence", "broad-allow-rule",
+            ]
+        )
+        output = io.StringIO()
+        with patch("cli.audit.console", Console(file=output, width=120, no_color=True)):
+            run_audit_workflow(args)
+        printed = output.getvalue().split(
+            "Selected source lines; other configuration lines are omitted."
+        )
+        self.assertEqual(len(printed), 2)
+        excerpt = printed[1]
+        self.assertIn('set srcaddr "all"', excerpt)
+        self.assertIn("config firewall policy", excerpt)
+        self.assertNotIn("policy-secret", output.getvalue())
+        self.assertNotIn("sensitive-comment", output.getvalue())
+        self.assertNotIn("never-include-this-secret", output.getvalue())
+        self.assertNotIn(
+            "Selected source lines",
+            next(self.directory.glob("fortigate-*.html")).read_text(encoding="utf-8"),
+        )
+
+    def test_source_evidence_includes_service_definitions_and_absence_limits(self) -> None:
+        findings = run_fortigate_checks(self.config)
+        evidence = build_source_evidence(FORTIOS_CONFIG, self.config, findings)
+        legacy = next(item for item in evidence if item.finding.id == "legacy-service-policy")
+        original_lines = FORTIOS_CONFIG.splitlines()
+        for number, line in legacy.lines:
+            self.assertEqual(line, original_lines[number - 1])
+        text = "\n".join(line for _, line in legacy.lines)
+        self.assertIn('set member "legacy-web"', text)
+        self.assertIn("set tcp-portrange 80", text)
+        ntp = next(item for item in evidence if item.finding.id == "ntp-server-review")
+        self.assertIn("set ntpsync enable", "\n".join(line for _, line in ntp.lines))
+        self.assertIn("excerpts alone cannot prove absence", ntp.notes[0])
+
+    def test_source_evidence_for_admin_auth_omits_passwords(self) -> None:
+        self.config.aaa_servers.clear()
+        finding = next(
+            item for item in run_fortigate_checks(self.config) if item.id == "local-admin-auth"
+        )
+        evidence = build_source_evidence(FORTIOS_CONFIG, self.config, [finding])[0]
+        text = "\n".join(line for _, line in evidence.lines)
+        self.assertIn("config system admin", text)
+        self.assertIn("set remote-auth enable", text)
+        self.assertNotIn("password", text)
+        self.assertNotIn("never-include-this-secret", text)
+        self.assertIn("excerpts alone cannot prove absence", evidence.notes[0])
+
+    def test_evidence_without_id_includes_all_findings_and_invalid_id_is_rejected(self) -> None:
+        args = build_parser().parse_args(
+            ["-C", str(self.config_path), "-O", str(self.directory), "--evidence"]
+        )
+        output = io.StringIO()
+        with patch("cli.audit.console", Console(file=output, width=120, no_color=True)):
+            run_audit_workflow(args)
+        self.assertIn("broad-allow-rule]", output.getvalue())
+        self.assertIn("ntp-server-review]", output.getvalue())
+        self.assertIn("excerpts alone cannot prove absence", output.getvalue())
+
+        args.evidence = "not-a-finding"
+        with self.assertRaisesRegex(ValueError, "No finding with ID 'not-a-finding'"):
+            run_audit_workflow(args)
+
     def test_structured_report_round_trips_as_json(self) -> None:
         report = build_report(self.config, run_fortigate_checks(self.config), "fortigate.conf")
         json_path = export_json(report, self.directory / "roundtrip.json")
@@ -468,6 +598,50 @@ class FortiOSReportingTests(unittest.TestCase):
 
 
 class AssessmentContextTests(unittest.TestCase):
+    def test_exclusion_requires_a_fully_resolved_host_only_side(self) -> None:
+        config = FirewallConfig(
+            vendor="Fortinet",
+            address_definitions={
+                "current": {"subnet": "192.0.2.10 255.255.255.255"},
+                "second": {"subnet": "192.0.2.11 255.255.255.255"},
+                "older": {"subnet": "192.0.2.26 255.255.255.255"},
+                "network": {"subnet": "192.0.2.0 255.255.255.0"},
+                "dns": {"type": "fqdn", "fqdn": "example.test"},
+            },
+            address_groups={
+                "dedicated": ["current", "second"],
+                "nested": ["dedicated"],
+                "mixed": ["current", "older"],
+                "wildcard": ["current", "all"],
+                "unresolved": ["current", "dns"],
+                "cycle": ["current", "cycle"],
+                "excluded": ["current"],
+            },
+            excluded_address_groups={"excluded"},
+            rules=[
+                FirewallRule(id="1", source_addresses=["nested"], destination_addresses=["all"]),
+                FirewallRule(id="2", source_addresses=["mixed"], destination_addresses=["all"]),
+                FirewallRule(id="3", source_addresses=["network"], destination_addresses=["all"]),
+                FirewallRule(id="4", source_addresses=["wildcard"], destination_addresses=["all"]),
+                FirewallRule(
+                    id="5", source_addresses=["unresolved"], destination_addresses=["all"]
+                ),
+                FirewallRule(id="6", source_addresses=["cycle"], destination_addresses=["all"]),
+                FirewallRule(id="7", source_addresses=["excluded"], destination_addresses=["all"]),
+                FirewallRule(
+                    id="8", source_addresses=["current"], destination_addresses=["all"],
+                    metadata={"srcaddr-negate": "enable"},
+                ),
+                FirewallRule(id="9", source_addresses=["all"], destination_addresses=["current"]),
+            ],
+            local_in_rules=[FirewallRule(id="10", source_addresses=["current"])],
+        )
+        filtered, excluded = exclude_assessment_rules(config, ["192.0.2.10", "192.0.2.11"])
+        self.assertEqual([rule.id for rule in filtered.rules], ["2", "3", "4", "5", "6", "7", "8"])
+        self.assertEqual(filtered.local_in_rules, [])
+        self.assertEqual([item["rule_id"] for item in excluded], ["1", "9", "10"])
+        self.assertEqual(len(config.rules), 9)
+
     def test_matches_explicit_scopes_and_reports_unresolved_references(self) -> None:
         config = FirewallConfig(
             vendor="Fortinet",
@@ -655,7 +829,8 @@ class ExecutiveSummaryTests(unittest.TestCase):
 
         summary = build_narratives(report)["executive_summary"]
 
-        self.assertIn("edge-fw (Fortinet)", summary)
+        self.assertIn("against edge-fw to identify", summary)
+        self.assertNotIn("(Fortinet)", summary)
         self.assertNotIn("**", summary)
         self.assertEqual(summary.count("Some firewall policies"), 1)
         self.assertLess(summary.index("Some firewall policies"), summary.index("time source"))
@@ -701,24 +876,30 @@ class ExecutiveSummaryTests(unittest.TestCase):
 
         paragraphs = build_narratives(report)["executive_summary"].split("\n\n")
 
-        self.assertEqual(len(paragraphs), 4)
-        self.assertIn("Although a centralised logging destination was configured", paragraphs[0])
+        self.assertEqual(len(paragraphs), 3)
+        self.assertIn("Although a positive observation was identified", paragraphs[0])
+        self.assertNotIn("logging", paragraphs[0])
         self.assertIn("assessment highlighted areas requiring further review", paragraphs[0])
+        self.assertLess(paragraphs[0].index("static assessment"), paragraphs[0].index("Although"))
         observations = paragraphs[1]
         self.assertTrue(observations.startswith("Firewall policies permitted"))
         self.assertIn("Additionally, some policies", observations)
         self.assertIn("Furthermore, no central authentication service", observations)
-        self.assertIn("Moreover, the collection, coverage and retention", observations)
+        self.assertIn(
+            "Moreover, while centralised logging destinations were configured", observations
+        )
+        self.assertIn("accessible from outside the organisation", observations)
+        self.assertNotIn("WAN-facing virtual addresses", observations)
         self.assertIn("Finally, the configured time source", observations)
         self.assertEqual(observations.count("Finally,"), 1)
         self.assertLess(observations.index("system administration"), observations.index("legacy"))
-        self.assertLess(observations.index("authentication service"), observations.index("logs"))
-        self.assertLess(observations.index("logs"), observations.index("time source"))
+        self.assertLess(observations.index("authentication service"), observations.index("logging"))
+        self.assertLess(observations.index("logging"), observations.index("time source"))
         self.assertIn("Network Time Protocol (NTP)", observations)
         self.assertIn("strengthen access controls", paragraphs[2])
         self.assertIn("improve administrative security", paragraphs[2])
         self.assertIn("enhance monitoring assurance", paragraphs[2])
-        self.assertIn("static assessment", paragraphs[3])
+        self.assertIn("static assessment", paragraphs[0])
 
     def test_one_observation_has_no_final_transition_or_unsupported_positive_claim(self) -> None:
         report = {"findings": [{"id": "broad-allow-rule", "severity": "high"}]}
@@ -729,6 +910,19 @@ class ExecutiveSummaryTests(unittest.TestCase):
         self.assertNotIn("Although", paragraphs[0])
         self.assertTrue(paragraphs[1].startswith("Some firewall policies"))
         self.assertNotIn("Finally,", paragraphs[1])
+
+    def test_multiple_configured_positive_observations_are_described_generically(self) -> None:
+        report = {
+            "device": {"vendor": "Fortinet"},
+            "logging": {"destinations": {"syslog": {"status": "enable", "server": "log"}}},
+            "monitoring": {"ntp": {"ntpsync": "enable", "servers": "192.0.2.1"}},
+            "findings": [{"id": "broad-allow-rule", "severity": "high"}],
+        }
+
+        introduction = build_narratives(report)["executive_summary"].split("\n\n")[0]
+        self.assertIn("Although a number of positive observations were identified", introduction)
+        self.assertNotIn("logging", introduction)
+        self.assertNotIn("192.0.2.1", introduction)
 
     def test_final_transition_preserves_unknown_finding_names(self) -> None:
         report = {
