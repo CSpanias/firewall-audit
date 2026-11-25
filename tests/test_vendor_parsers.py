@@ -8,13 +8,10 @@ from unittest.mock import patch
 
 from analysis.cisco_checks import run_cisco_checks
 from common.vendor_detection import VendorDetector
-from models.finding import Finding
-from models.firewall import FirewallConfig
 from parsers.cisco import CiscoParser
 from parsers.watchguard import WatchGuardParser
 from reporting.findings import build_report
 from reporting.html import render_html
-from reporting.source_evidence import build_source_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -143,32 +140,6 @@ class CiscoParserTests(unittest.TestCase):
         self.assertEqual(len(temporary.affected_objects), 1)
         self.assertTrue(all("EDGE" in rule for rule in temporary.affected_objects))
         self.assertEqual(len(temporary.data["rules"]), 1)
-
-    def test_cisco_evidence_uses_the_original_acl_line(self) -> None:
-        config = CiscoParser().parse(str(self.path))
-        finding = next(
-            item for item in run_cisco_checks(config) if item.id == "legacy-service-policy"
-        )
-        evidence = build_source_evidence(CISCO_CONFIG, config, [finding])[0]
-        source_lines = CISCO_CONFIG.splitlines()
-        self.assertTrue(evidence.lines)
-        for number, line in evidence.lines:
-            self.assertEqual(line, source_lines[number - 1])
-            self.assertTrue(line.startswith("access-list EDGE"))
-        self.assertIn("not included", evidence.notes[0])
-        sample = build_source_evidence(CISCO_CONFIG, config, [finding], sample=True)[0]
-        self.assertEqual(sample.lines, evidence.lines[:1])
-        self.assertTrue(any("Sample only" in note for note in sample.notes))
-
-    def test_cisco_evidence_omits_acl_lines_with_sensitive_fields(self) -> None:
-        source = "access-list EDGE extended permit ip any any secret value\n"
-        finding = Finding(
-            id="test", title="Test", severity="info", description="",
-            affected_objects=["Rule EDGE / line 1"],
-        )
-        evidence = build_source_evidence(source, FirewallConfig(vendor="Cisco"), [finding])[0]
-        self.assertFalse(evidence.lines)
-        self.assertTrue(any("may contain sensitive material" in note for note in evidence.notes))
 
 
 class _Page:

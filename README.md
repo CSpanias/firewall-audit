@@ -31,20 +31,12 @@ uv sync --group dev
 firewall-audit --config firewall.conf
 firewall-audit -C firewall.conf --output-dir reports
 firewall-audit -C firewall.conf --assessment-ip 192.0.2.10
-firewall-audit -C firewall.conf --evidence
-firewall-audit -C firewall.conf --evidence legacy-service-policy
-firewall-audit -C firewall.conf --evidence-full
-firewall-audit -C firewall.conf --evidence-full legacy-service-policy
 ```
 
 Each run generates a timestamped JSON report and a self-contained HTML report.
 Repeat `--assessment-ip` for multiple testing hosts. Rules whose source or
 destination consists exclusively of those hosts are excluded from findings;
 shared and subnet rules remain in scope.
-Use `--evidence` to display compact samples of selected configuration lines, or
-supply a finding ID to display only that finding's evidence. Use
-`--evidence-full` instead to show all selected lines without sample truncation;
-it also accepts an optional finding ID.
 
 The HTML report works offline and provides an executive summary, technical
 commentary with supporting evidence, and remediation guidance. Each section

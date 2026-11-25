@@ -12,7 +12,6 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-from rich.rule import Rule
 from rich.text import Text
 
 from analysis.cisco_checks import run_cisco_checks
@@ -24,14 +23,11 @@ from common.vendor_detection import VendorDetector
 from parsers.factory import ParserFactory
 from reporting.findings import build_report, export_json
 from reporting.html import export_html
-from reporting.source_evidence import build_source_evidence
 from reporting.sureformat import export_sureformat
 
 
 def run_audit_workflow(args: Namespace) -> None:
     """Execute the audit workflow and write structured and HTML reports."""
-    full_evidence = args.evidence_full is not None
-    evidence_selection = args.evidence_full if full_evidence else args.evidence
     config_path = Path(args.config).expanduser()
     output_dir = Path(args.output_dir).expanduser()
     valid, message = validate_configuration_file(str(config_path))
@@ -58,16 +54,7 @@ def run_audit_workflow(args: Namespace) -> None:
         progress.advance(task)
 
         progress.update(task, description=f"Parsing {vendor} configuration")
-        evidence_source = (
-            config_path.read_text(encoding="utf-8", errors="replace")
-            if evidence_selection is not None and vendor != "watchguard"
-            else None
-        )
         config = parser.parse(str(config_path))
-        if evidence_source is not None and evidence_source != config_path.read_text(
-            encoding="utf-8", errors="replace"
-        ):
-            raise ValueError("The configuration changed during parsing; rerun the assessment.")
         for message in config.parse_warnings:
             warn(message)
         progress.advance(task)
@@ -81,21 +68,7 @@ def run_audit_workflow(args: Namespace) -> None:
             findings = []
         else:
             raise ValueError(f"No analysis workflow is available for detected vendor: {vendor}.")
-        selected_findings = findings
-        if evidence_selection not in (None, "all"):
-            selected_findings = [
-                finding for finding in findings if finding.id == evidence_selection
-            ]
-            if not selected_findings:
-                raise ValueError(f"No finding with ID '{evidence_selection}' was identified.")
         report = build_report(config, findings, config_path.name, args.assessment_ip)
-        evidence = (
-            build_source_evidence(
-                evidence_source, config, selected_findings, sample=not full_evidence
-            )
-            if evidence_source is not None
-            else []
-        )
 
         output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -135,29 +108,3 @@ def run_audit_workflow(args: Namespace) -> None:
         warn("Policy inventory complete; no automated security checks were run.")
     for path in report_paths:
         console.print(Text(f"Report written: {path}", style="green"))
-    if evidence_selection is not None:
-        if not evidence:
-            console.print(Text("No source evidence is available: no findings were identified."))
-        for item in evidence:
-            console.print()
-            title = Text(f"{item.finding.title} [{item.finding.id}]", style="cyan")
-            displayed = []
-            truncated = False
-            for number, line in item.lines:
-                text = Text(f"{number:>6} | {line}")
-                if not full_evidence and text.cell_len > min(console.width, 120):
-                    text.truncate(min(console.width, 120), overflow="ellipsis")
-                    truncated = True
-                displayed.append(text)
-            width = min(
-                console.width,
-                max(title.cell_len + 4, *(line.cell_len for line in displayed), 0),
-            )
-            console.print(Rule(title), width=width)
-            console.print(Text("Selected source lines; other configuration lines are omitted."))
-            for line in displayed:
-                console.print(line)
-            for note in item.notes:
-                console.print(Text(f"Note: {note}"))
-            if truncated:
-                console.print(Text("Note: Long lines were truncated."))

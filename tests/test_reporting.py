@@ -10,7 +10,6 @@ from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from html.parser import HTMLParser
 from pathlib import Path
-from unittest.mock import patch
 
 from rich.console import Console
 
@@ -32,7 +31,6 @@ from reporting.findings import build_report, export_json
 from reporting.html import export_html, render_html
 from reporting.markdown import export_markdown
 from reporting.narrative import build_narratives
-from reporting.source_evidence import build_source_evidence
 from reporting.sureformat import export_sureformat
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -518,8 +516,6 @@ class FortiOSReportingTests(unittest.TestCase):
         ]
         self.assertIn("disabled, despite configured NTP server entries", commentary)
         self.assertNotIn("no explicit NTP server entries", commentary)
-        evidence = build_source_evidence(source, self.config, [finding])[0]
-        self.assertFalse(any("absence-based" in note for note in evidence.notes))
 
     def test_reports_omit_credentials_and_render_offline_html(self) -> None:
         findings = run_fortigate_checks(self.config)
@@ -737,174 +733,12 @@ class FortiOSReportingTests(unittest.TestCase):
         }
         self.assertEqual(suffixes, {".html", ".xml"})
 
-    def test_evidence_flag_prints_only_selected_finding_and_omits_secrets(self) -> None:
-        self.config_path.write_text(
-            FORTIOS_CONFIG.replace(
-                '        set srcintf "wan1"\n',
-                '        set password "policy-secret"\n'
-                '        set comments "sensitive-comment"\n'
-                '        set srcintf "wan1"\n',
-                1,
-            ),
-            encoding="utf-8",
-        )
-        args = build_parser().parse_args(
-            [
-                "-C", str(self.config_path), "-O", str(self.directory),
-                "--evidence", "broad-allow-rule",
-            ]
-        )
-        output = io.StringIO()
-        with patch("cli.audit.console", Console(file=output, width=120, no_color=True)):
-            run_audit_workflow(args)
-        printed = output.getvalue().split(
-            "Selected source lines; other configuration lines are omitted."
-        )
-        self.assertEqual(len(printed), 2)
-        excerpt = printed[1]
-        self.assertIn('set srcaddr "all"', excerpt)
-        self.assertIn("config firewall policy", excerpt)
-        self.assertNotIn("policy-secret", output.getvalue())
-        self.assertNotIn("sensitive-comment", output.getvalue())
-        self.assertNotIn("never-include-this-secret", output.getvalue())
-        self.assertNotIn(
-            "Selected source lines",
-            next(self.directory.glob("fortigate-*.html")).read_text(encoding="utf-8"),
-        )
-
-    def test_source_evidence_includes_service_definitions_and_absence_limits(self) -> None:
-        findings = run_fortigate_checks(self.config)
-        evidence = build_source_evidence(FORTIOS_CONFIG, self.config, findings)
-        legacy = next(item for item in evidence if item.finding.id == "legacy-service-policy")
-        original_lines = FORTIOS_CONFIG.splitlines()
-        for number, line in legacy.lines:
-            self.assertEqual(line, original_lines[number - 1])
-        text = "\n".join(line for _, line in legacy.lines)
-        self.assertIn('set member "legacy-web"', text)
-        self.assertIn("set tcp-portrange 80", text)
-        ntp = next(item for item in evidence if item.finding.id == "ntp-server-review")
-        self.assertIn("set ntpsync enable", "\n".join(line for _, line in ntp.lines))
-        self.assertIn("excerpts alone cannot prove absence", ntp.notes[0])
-
-    def test_evidence_samples_an_affected_policy_and_its_vip(self) -> None:
-        long_address = "source-" + "x" * 150
-        source = FORTIOS_CONFIG.replace(
-            '        set dstaddr "target-group"\n',
-            f'        set dstaddr "target-group"\n        set srcaddr "{long_address}"\n',
-            1,
-        ).replace(
-            '        set service "HTTPS"\n',
-            '        set service "SSH"\n',
-            1,
-        ).replace(
-            "        set mappedport 443\n",
-            "        set mappedport 22\n",
-            1,
-        ).replace(
-            "    edit 3\n",
-            '    edit 99\n'
-            '        set srcintf "wan1"\n'
-            '        set dstintf "internal"\n'
-            '        set srcaddr "all"\n'
-            '        set dstaddr "target-group"\n'
-            '        set service "SSH"\n'
-            '        set action accept\n'
-            '    next\n'
-            "    edit 3\n",
-            1,
-        )
-        self.config_path.write_text(source, encoding="utf-8")
-        config = FortigateParser().parse(str(self.config_path))
-        finding = next(
-            item for item in run_fortigate_checks(config) if item.id == "admin-service-vip-policy"
-        )
-        sample = build_source_evidence(source, config, [finding], sample=True)[0]
-        complete = build_source_evidence(source, config, [finding])[0]
-        text = "\n".join(line for _, line in sample.lines)
-        self.assertLessEqual(len(sample.lines), 24)
-        self.assertIn("config firewall policy", text)
-        self.assertIn("edit 2", text)
-        self.assertNotIn("edit 99", text)
-        self.assertIn('edit "published-admin"', text)
-        self.assertIn("set extport 443", text)
-        self.assertIn("edit 99", "\n".join(line for _, line in complete.lines))
-        self.assertTrue(any("Sample only" in note for note in sample.notes))
-        for number, line in sample.lines:
-            self.assertEqual(line, source.splitlines()[number - 1])
-
-        args = build_parser().parse_args(
-            ["-C", str(self.config_path), "-O", str(self.directory),
-             "--evidence", "admin-service-vip-policy"]
-        )
-        output = io.StringIO()
-        with patch("cli.audit.console", Console(file=output, width=240, no_color=True)):
-            run_audit_workflow(args)
-        excerpt = output.getvalue().split("Selected source lines; other configuration lines")[1]
-        self.assertIn("Long lines were truncated", excerpt)
-        self.assertNotIn(long_address, excerpt)
-        self.assertNotIn("--evidence-full", excerpt)
-        rule_line = next(
-            line for line in output.getvalue().splitlines() if "[admin-service-vip-policy]" in line
-        )
-        self.assertLessEqual(len(rule_line), 120)
-
-        args = build_parser().parse_args(
-            ["-C", str(self.config_path), "-O", str(self.directory),
-             "--evidence-full", "admin-service-vip-policy"]
-        )
-        output = io.StringIO()
-        with patch("cli.audit.console", Console(file=output, width=240, no_color=True)):
-            run_audit_workflow(args)
-        excerpt = output.getvalue().split("Selected source lines; other configuration lines")[1]
-        self.assertIn(long_address, excerpt)
-        self.assertIn("edit 99", excerpt)
-        self.assertNotIn("Sample only", excerpt)
-        self.assertNotIn("[ntp-server-review]", excerpt)
-
-    def test_full_evidence_without_id_and_mutually_exclusive_flags(self) -> None:
-        args = build_parser().parse_args([
-            "-C", str(self.config_path), "-O", str(self.directory), "--evidence-full"
-        ])
-        output = io.StringIO()
-        with patch("cli.audit.console", Console(file=output, width=120, no_color=True)):
-            run_audit_workflow(args)
-        self.assertIn("[broad-allow-rule]", output.getvalue())
-        self.assertIn("[ntp-server-review]", output.getvalue())
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            build_parser().parse_args([
-                "-C", str(self.config_path), "--evidence", "--evidence-full"
-            ])
-        args.evidence_full = "not-a-finding"
-        with self.assertRaisesRegex(ValueError, "No finding with ID 'not-a-finding'"):
-            run_audit_workflow(args)
-
-    def test_source_evidence_for_admin_auth_omits_passwords(self) -> None:
-        self.config.aaa_servers.clear()
-        finding = next(
-            item for item in run_fortigate_checks(self.config) if item.id == "local-admin-auth"
-        )
-        evidence = build_source_evidence(FORTIOS_CONFIG, self.config, [finding])[0]
-        text = "\n".join(line for _, line in evidence.lines)
-        self.assertIn("config system admin", text)
-        self.assertIn("set remote-auth enable", text)
-        self.assertNotIn("password", text)
-        self.assertNotIn("never-include-this-secret", text)
-        self.assertIn("excerpts alone cannot prove absence", evidence.notes[0])
-
-    def test_evidence_without_id_includes_all_findings_and_invalid_id_is_rejected(self) -> None:
-        args = build_parser().parse_args(
-            ["-C", str(self.config_path), "-O", str(self.directory), "--evidence"]
-        )
-        output = io.StringIO()
-        with patch("cli.audit.console", Console(file=output, width=120, no_color=True)):
-            run_audit_workflow(args)
-        self.assertIn("broad-allow-rule]", output.getvalue())
-        self.assertIn("ntp-server-review]", output.getvalue())
-        self.assertIn("excerpts alone cannot prove absence", output.getvalue())
-
-        args.evidence = "not-a-finding"
-        with self.assertRaisesRegex(ValueError, "No finding with ID 'not-a-finding'"):
-            run_audit_workflow(args)
+    def test_removed_source_evidence_options_are_rejected(self) -> None:
+        for option in ("--evidence", "--evidence-full"):
+            with self.subTest(option=option):
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    build_parser().parse_args(["-C", str(self.config_path), option])
+                self.assertEqual(error.exception.code, 2)
 
     def test_structured_report_round_trips_as_json(self) -> None:
         report = build_report(self.config, run_fortigate_checks(self.config), "fortigate.conf")

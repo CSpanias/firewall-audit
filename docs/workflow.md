@@ -10,10 +10,6 @@ in approved storage.
 firewall-audit --config firewall.conf
 firewall-audit -C firewall.conf --output-dir reports
 firewall-audit -C firewall.conf --assessment-ip 192.0.2.10
-firewall-audit -C firewall.conf --evidence
-firewall-audit -C firewall.conf --evidence legacy-service-policy
-firewall-audit -C firewall.conf --evidence-full
-firewall-audit -C firewall.conf --evidence-full legacy-service-policy
 ```
 
 The workflow validates the input, detects the vendor, parses supported
@@ -32,20 +28,9 @@ for auditing; the commentary contains only a concise note. Inventory counts
 continue to describe the complete configuration. Firebox PDF inventories do
 not include rule addresses and cannot be evaluated for exclusions.
 
-Use `--evidence` to print compact samples of selected original source lines
-with line numbers, grouped by finding. Samples prioritise one affected rule
-and may omit other rules, referenced objects or parts of long lines. The output
-identifies omissions; use `--evidence-full` instead to display all selected
-lines and complete line values. Either option accepts a finding ID to limit the
-display to that finding.
-FortiOS output omits unselected configuration fields, including passwords,
-secrets and free-text comments; control characters are replaced. Cisco output
-shows matching ACL lines but not referenced object definitions, and may contain
-sensitive values. Absence-based
-observations are explicitly labelled because an excerpt cannot prove absence.
-The evidence is not added to the report files. Selected source lines can still
-contain sensitive network details or other sensitive values; review screenshots
-and share them only through approved channels.
+The report's evidence tables summarise parsed configuration; validate findings
+against the original export and capture any required source screenshots
+separately. Review screenshots for sensitive information before sharing them.
 
 ## Output files
 

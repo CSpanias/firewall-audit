@@ -63,21 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="IP",
         help="Exclude rules dedicated to an assessment host; may be specified more than once.",
     )
-    evidence_group = parser.add_mutually_exclusive_group()
-    evidence_group.add_argument(
-        "--evidence",
-        nargs="?",
-        const="all",
-        metavar="FINDING_ID",
-        help="Print selected source evidence for all findings or a specific finding ID.",
-    )
-    evidence_group.add_argument(
-        "--evidence-full",
-        nargs="?",
-        const="all",
-        metavar="FINDING_ID",
-        help="Show all selected evidence lines for all findings or a specific finding ID.",
-    )
     parser.add_argument(
         "--csacyber",
         action="store_true",
