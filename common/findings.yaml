@@ -2,6 +2,7 @@ schema_version: 1
 findings:
   broad-allow-rule:
     title: Allow rule has unrestricted source and destination
+    commentary_title: Policies with Unrestricted Source and Destination
     category: access-control
     severity: high
     description: >-
@@ -10,9 +11,15 @@ findings:
     impact: >-
       An overly broad rule can permit unintended connections across network
       boundaries and increase opportunities for lateral movement.
+    commentary_impact: >-
+      Policies without source or destination restrictions can allow connections
+      beyond those required for the intended purpose. Depending on the interfaces,
+      services and other controls involved, this may weaken network segmentation
+      and increase opportunities for lateral movement.
     executive_summary: >-
-      Some permitted traffic was not restricted by source or destination,
-      potentially allowing unintended connections and movement between networks.
+      Some firewall policies permitted traffic without source or destination
+      restrictions, potentially allowing unintended connections and movement
+      between networks.
     recommendation: >-
       Restrict the policy to documented source and destination networks and the
       minimum required services. Confirm the rule owner and business purpose.
@@ -21,6 +28,7 @@ findings:
         url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
   admin-services-on-wan:
     title: Firewall management services are enabled on a WAN interface
+    commentary_title: Administrative Services on WAN-Facing Interfaces
     category: control-plane
     severity: high
     description: >-
@@ -30,10 +38,15 @@ findings:
     impact: >-
       If reachable by untrusted sources, administrative interfaces may be
       exposed to credential attacks or vulnerabilities in management services.
+    commentary_impact: >-
+      Administrative services accessible from untrusted networks may be targeted
+      through credential attacks or vulnerabilities in the management interface.
+      Interface configuration alone does not establish whether these services are
+      reachable or whether other controls restrict access.
     executive_summary: >-
       Firewall management services were enabled on interfaces identified as
-      WAN-facing. If accessible to untrusted sources, they could be targeted
-      to gain administrative control of the device.
+      WAN-facing. If accessible from untrusted networks, these services could
+      be targeted to gain administrative control of the device.
     recommendation: >-
       Disable administrative services on public-facing interfaces where
       possible. Otherwise restrict management to dedicated, trusted source
@@ -43,6 +56,7 @@ findings:
         url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
   admin-service-vip-policy:
     title: Policy permits administrative services through a WAN-facing VIP
+    commentary_title: Administrative Services Permitted via Virtual IPs
     category: access-control
     severity: high
     description: >-
@@ -52,10 +66,16 @@ findings:
     impact: >-
       If reachable from untrusted networks, administrative services on the
       mapped systems may be exposed to credential attacks or exploitation.
+    commentary_impact: >-
+      Where reachable from untrusted networks, administrative services may be
+      targeted through credential attacks or exploitation of vulnerable systems.
+      The configured services and virtual IPs do not establish the purpose of the
+      mapped systems or confirm that they are externally reachable.
     executive_summary: >-
-      Policies permitted services commonly used for administration to systems
-      behind public or WAN-facing virtual addresses. If reachable by untrusted
-      sources, those systems could be exposed to credential attacks or exploitation.
+      Firewall policies permitted services commonly used for system administration
+      to assets behind public or WAN-facing virtual addresses. Where accessible
+      from untrusted networks, these services may increase exposure to credential
+      attacks or exploitation of vulnerable systems.
     recommendation: >-
       Remove unnecessary administrative-service publishing. If required,
       restrict source networks, use a hardened management gateway, and verify
@@ -65,6 +85,7 @@ findings:
         url: https://csrc.nist.gov/pubs/sp/800/41/r1/final
   legacy-service-policy:
     title: Policy references clear-text or legacy network services
+    commentary_title: Legacy, Clear-Text and Broadly Defined Services
     category: access-control
     severity: high
     description: >-
@@ -74,10 +95,16 @@ findings:
     impact: >-
       Clear-text services can expose credentials and traffic to interception;
       unrestricted services may permit protocols beyond those required.
+    commentary_impact: >-
+      Clear-text protocols may expose sensitive information to interception where
+      traffic traverses untrusted networks. Broad service definitions can also
+      permit more network access than is required for the underlying business
+      purpose. A broad definition does not by itself establish which protocols
+      are actually in use.
     executive_summary: >-
       Some policies referenced legacy services or broadly defined services
-      that may permit them. Where clear-text protocols are used, credentials
-      and other information may be exposed to interception.
+      that may permit clear-text protocols and increase the risk of sensitive
+      information being intercepted during transmission.
     recommendation: >-
       Replace legacy protocols with secure alternatives, disable unused
       services and helpers, and explicitly restrict or block insecure services.
@@ -88,6 +115,7 @@ findings:
         url: https://csrc.nist.gov/pubs/sp/800/52/r2/final
   logging-coverage-gap:
     title: Remote logging is absent or not enabled
+    commentary_title: Centralised Logging Configuration
     category: logging
     severity: medium
     description: >-
@@ -97,6 +125,11 @@ findings:
     impact: >-
       Missing centralized logs can reduce detection visibility and limit
       evidence available for incident investigation.
+    commentary_impact: >-
+      Centralised collection supports monitoring and incident investigation by
+      making firewall events available alongside other security records. Without
+      an identified destination, the availability of these events for central
+      monitoring could not be established.
     executive_summary: >-
       No enabled central logging destination was identified, which may reduce
       monitoring visibility and the evidence available for investigations.
@@ -109,6 +142,7 @@ findings:
         url: https://csrc.nist.gov/pubs/sp/800/92/final
   policy-logging-gap:
     title: Some enabled policies explicitly disable traffic logging
+    commentary_title: Policy Traffic Logging
     category: logging
     severity: low
     description: >-
@@ -117,6 +151,10 @@ findings:
       available.
     impact: >-
       Unlogged traffic can leave gaps in monitoring and incident investigation.
+    commentary_impact: >-
+      Where traffic is not logged and equivalent monitoring is unavailable,
+      connections permitted by these policies may be harder to investigate or
+      correlate with other security events.
     executive_summary: >-
       Traffic logging was explicitly disabled on some permitted policies,
       potentially leaving gaps in monitoring and incident investigations.
@@ -128,6 +166,7 @@ findings:
         url: https://csrc.nist.gov/pubs/sp/800/92/final
   local-admin-auth:
     title: Firewall administrators have no configured central AAA server
+    commentary_title: Administrative Authentication Configuration
     category: administration
     severity: medium
     description: >-
@@ -137,10 +176,14 @@ findings:
     impact: >-
       Reliance on local accounts can make consistent access control, account
       lifecycle management, and administrator auditing harder to enforce.
+    commentary_impact: >-
+      Centralised authentication can support consistent account lifecycle
+      management, accountability and auditing. Reliance on locally managed
+      accounts may make these controls more difficult to enforce consistently.
     executive_summary: >-
-      No central authentication server was identified for the configured
-      administrators, which may make access management and auditing harder
-      to enforce consistently.
+      No central authentication service was identified for administrative access
+      to the firewall, which may make access management, accountability and
+      auditing more difficult to enforce consistently.
     recommendation: >-
       Where supported by operational requirements, use centrally managed
       administrator authentication with MFA. Review local accounts, trusted
@@ -150,6 +193,7 @@ findings:
         url: https://csrc.nist.gov/pubs/sp/800/63/b/4/final
   ntp-server-review:
     title: No explicit trusted NTP server is configured
+    commentary_title: Time Synchronisation Configuration
     category: monitoring
     severity: medium
     description: >-
@@ -159,10 +203,15 @@ findings:
     impact: >-
       Inaccurate or untrusted timestamps can hinder correlation of events and
       the investigation of security incidents.
+    commentary_impact: >-
+      Accurate and trusted timestamps support security monitoring, event
+      correlation and investigations. Without an explicit server entry, it was
+      not possible to determine the time source or whether firewall logs are
+      synchronised with the wider monitoring infrastructure.
     executive_summary: >-
-      The configured time source could not be verified from an explicit server
-      entry. Inaccurate timestamps can make security events harder to correlate
-      and investigate.
+      The configured time source could not be verified through an explicitly
+      defined Network Time Protocol (NTP) server, potentially affecting the
+      accuracy of event timestamps and the effectiveness of security investigations.
     recommendation: >-
       Configure approved time sources, restrict NTP access to those sources,
       and verify synchronized time across the firewall and monitoring systems.

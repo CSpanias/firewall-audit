@@ -17,6 +17,8 @@ _REQUIRED_FIELDS = (
     "impact",
     "recommendation",
     "executive_summary",
+    "commentary_title",
+    "commentary_impact",
 )
 _SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
@@ -85,6 +87,8 @@ def load_finding_definitions() -> dict[str, FindingDefinition]:
             sureformat_id=sureformat_id,
             executive_summary=fields["executive_summary"],
             references=tuple(parsed_references),
+            commentary_title=fields["commentary_title"],
+            commentary_impact=fields["commentary_impact"],
         )
 
     return definitions

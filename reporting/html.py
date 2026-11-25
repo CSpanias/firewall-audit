@@ -92,8 +92,8 @@ def render_html(report: dict[str, Any]) -> str:
         return str(value) if value is not None else "Not parsed"
 
     cards = "\n".join(
-        f'<div class="card"><span>{label}</span><strong>'
-        f"{escape(card_value(key))}</strong></div>"
+        f'<div class="card"><span>{label}</span><span class="card-value">'
+        f"{escape(card_value(key))}</span></div>"
         for key, label in (
             ("interfaces", "Interfaces"),
             ("rules", "Policies"),
@@ -114,10 +114,11 @@ def render_html(report: dict[str, Any]) -> str:
     main {{ max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }}
     .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; }}
     .card, section {{ background: white; border: 1px solid #dce3ed; border-radius: .6rem; padding: 1rem; }}
-    .card strong {{ display: block; margin-top: .35rem; }}
+    .card-value {{ display: block; margin-top: .35rem; }}
     section {{ margin: 1rem 0; line-height: 1.55; overflow-wrap: anywhere; overflow-x: auto; }}
     table {{ border-collapse: collapse; width: 100%; }}
     th, td {{ border: 1px solid #dce3ed; padding: .5rem; text-align: left; vertical-align: top; }}
+    h1, h2, h3, th {{ font-weight: normal; }}
     th {{ background: #f3f6fa; }}
     .copy-controls {{ display: flex; align-items: center; gap: .75rem; margin: .75rem 0; }}
     .copy-button {{ padding: .45rem .7rem; border: 1px solid #9aa8bb; border-radius: .35rem; background: #f3f6fa; color: inherit; cursor: pointer; }}

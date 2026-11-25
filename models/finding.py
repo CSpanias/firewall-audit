@@ -26,6 +26,8 @@ class FindingDefinition:
     sureformat_id: str | None = None
     executive_summary: str = ""
     references: tuple[tuple[str, str], ...] = ()
+    commentary_title: str = ""
+    commentary_impact: str = ""
 
 
 @dataclass

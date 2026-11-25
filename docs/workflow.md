@@ -24,7 +24,8 @@ directory:
 * `<config>-<timestamp>.html`: self-contained interactive report.
 
 The HTML report contains an executive summary of the observed issues and their
-potential impact, technical commentary with supporting evidence tables, and
+potential impact, technical commentary that groups related observations with
+supporting evidence tables, and
 prioritised remediation guidance with references relevant to the findings.
 The summary distinguishes an inventory-only input from a
 configuration review and notes the limits of static analysis. Copy controls

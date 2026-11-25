@@ -228,9 +228,10 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertIn("Copy All Markdown", html)
         self.assertEqual(html.count(">Copy Markdown</button>"), 3)
         self.assertIn("Supporting evidence", html)
+        self.assertNotIn("<strong>", html)
         self.assertNotIn("validated before reporting", html)
         self.assertIn(
-            "### Policy permits administrative services through a WAN-facing VIP\n",
+            "### Administrative Services Permitted via Virtual IPs\n",
             report["technical_commentary"],
         )
         self.assertNotIn("WAN-facing VIP (High)", report["technical_commentary"])
@@ -276,8 +277,9 @@ class FortiOSReportingTests(unittest.TestCase):
         self.assertEqual(markdown["executive_summary"], report["executive_summary"])
         self.assertEqual(markdown["technical_commentary"], report["technical_commentary"])
         self.assertEqual(markdown["remediation_guidance"], report["remediation_guidance"])
+        self.assertNotIn("**", markdown["all"])
         self.assertIn("| Rule |", markdown["technical_commentary"])
-        self.assertIn("Policy 2", markdown["technical_commentary"])
+        self.assertIn("Affected policies: 2", markdown["technical_commentary"])
         self.assertIn("## Executive Summary", markdown["all"])
         self.assertIn("## Remediation Guidance", markdown["all"])
 
@@ -403,12 +405,13 @@ class ExecutiveSummaryTests(unittest.TestCase):
 
         summary = build_narratives(report)["executive_summary"]
 
-        self.assertIn("**edge-fw**", summary)
-        self.assertEqual(summary.count("Some permitted traffic"), 1)
-        self.assertLess(summary.index("Some permitted traffic"), summary.index("time source"))
+        self.assertIn("edge-fw (Fortinet)", summary)
+        self.assertNotIn("**", summary)
+        self.assertEqual(summary.count("Some firewall policies"), 1)
+        self.assertLess(summary.index("Some firewall policies"), summary.index("time source"))
         self.assertIn("unintended connections", summary)
-        self.assertIn("harder to correlate", summary)
-        self.assertIn("prioritised for remediation", summary)
+        self.assertIn("effectiveness of security investigations", summary)
+        self.assertIn("Remediation activities should be prioritised", summary)
         self.assertNotIn("The identified areas include", summary)
 
     def test_no_findings_does_not_claim_the_firewall_is_secure(self) -> None:
@@ -427,12 +430,37 @@ class ExecutiveSummaryTests(unittest.TestCase):
             "logging": {"destinations": {"syslog": {"status": "disable", "server": "log"}}},
         }
         summary = build_narratives(report)["executive_summary"]
-        self.assertNotIn("Centralised logging destinations were configured", summary)
+        self.assertNotIn("centralised logging destinations were configured", summary)
 
         report["logging"]["destinations"]["syslog"]["status"] = "enable"
         summary = build_narratives(report)["executive_summary"]
-        self.assertIn("Centralised logging destinations were configured", summary)
-        self.assertIn("Log delivery, coverage and retention were not verified", summary)
+        self.assertIn("centralised logging destinations were configured", summary)
+        self.assertIn("log collection, coverage and retention could not be independently", summary)
+
+    def test_summary_flows_from_findings_to_logging_and_time(self) -> None:
+        report = {
+            "device": {"hostname": "edge-fw", "vendor": "Fortinet"},
+            "logging": {"destinations": {"syslog": {"status": "enable", "server": "log"}}},
+            "findings": [
+                {"id": "admin-service-vip-policy", "severity": "high"},
+                {"id": "legacy-service-policy", "severity": "high"},
+                {"id": "local-admin-auth", "severity": "medium"},
+                {"id": "ntp-server-review", "severity": "medium"},
+            ],
+        }
+
+        paragraphs = build_narratives(report)["executive_summary"].split("\n\n")
+
+        self.assertEqual(len(paragraphs), 4)
+        observations = paragraphs[1]
+        self.assertLess(observations.index("system administration"), observations.index("legacy"))
+        self.assertLess(observations.index("authentication service"), observations.index("logging"))
+        self.assertLess(observations.index("logging"), observations.index("time source"))
+        self.assertIn("Network Time Protocol (NTP)", observations)
+        self.assertIn("strengthen access controls", paragraphs[2])
+        self.assertIn("improve administrative security", paragraphs[2])
+        self.assertIn("enhance monitoring assurance", paragraphs[2])
+        self.assertIn("static assessment", paragraphs[3])
 
     def test_inventory_only_does_not_claim_a_security_review(self) -> None:
         summary = build_narratives(
@@ -507,12 +535,106 @@ class RemediationGuidanceTests(unittest.TestCase):
         self.assertIn("<li>Restrict the policy.</li>", html)
 
     def test_no_checks_does_not_claim_there_were_no_findings(self) -> None:
-        guidance = build_narratives({"checks_run": False, "findings": []})[
-            "remediation_guidance"
-        ]
+        guidance = build_narratives({"checks_run": False, "findings": []})["remediation_guidance"]
         self.assertIn("configuration review is required", guidance)
         self.assertNotIn("absence of automated findings", guidance)
         self.assertNotIn("### References", guidance)
+
+
+class TechnicalCommentaryTests(unittest.TestCase):
+    def test_groups_rules_and_writes_evidence_led_commentary(self) -> None:
+        report = {
+            "device": {"hostname": "edge-fw", "vendor": "Fortinet"},
+            "findings": [
+                {
+                    "id": "broad-allow-rule",
+                    "severity": "high",
+                    "affected_objects": [f"Policy {rule_id}"],
+                    "evidence": {
+                        "rule_id": str(rule_id),
+                        "source_addresses": ["all"],
+                        "destination_addresses": ["all"],
+                        "services": ["ALL"],
+                    },
+                    "recommendation": "Restrict the affected policies.",
+                }
+                for rule_id in (1, 2)
+            ],
+        }
+
+        commentary = build_narratives(report)["technical_commentary"]
+
+        self.assertIn("firewall policies, administrative access controls", commentary)
+        self.assertEqual(commentary.count("### Policies with Unrestricted"), 1)
+        self.assertIn("Two enabled policies permitted traffic", commentary)
+        self.assertIn("Affected policies: 1, 2", commentary)
+        self.assertIn("| 1 |", commentary)
+        self.assertIn("| 2 |", commentary)
+        self.assertNotIn("Impact:", commentary)
+        self.assertNotIn("**", commentary)
+
+    def test_ntp_commentary_reflects_observed_state(self) -> None:
+        for state, expected in (
+            ("enable", "synchronisation was enabled"),
+            ("disable", "synchronisation was disabled"),
+            ("", "synchronisation state was not confirmed"),
+        ):
+            with self.subTest(state=state):
+                report = {
+                    "findings": [
+                        {
+                            "id": "ntp-server-review",
+                            "evidence": {"ntp": {"ntpsync": state}},
+                        }
+                    ]
+                }
+                commentary = build_narratives(report)["technical_commentary"]
+                self.assertIn(expected, commentary)
+                self.assertIn("no explicit NTP server entries", commentary)
+
+    def test_cisco_and_inventory_commentary_describe_their_actual_scope(self) -> None:
+        cisco = build_narratives({"device": {"vendor": "Cisco"}, "findings": []})[
+            "technical_commentary"
+        ]
+        inventory = build_narratives(
+            {"device": {"vendor": "WatchGuard"}, "checks_run": False, "findings": []}
+        )["technical_commentary"]
+        self.assertIn("bound access-control entries", cisco)
+        self.assertNotIn("administrative access controls", cisco)
+        self.assertIn("not assessed using automated security checks", inventory)
+        self.assertNotIn("firewall configuration review was performed", inventory)
+
+    def test_single_cisco_rule_does_not_claim_clear_text_is_in_use(self) -> None:
+        report = {
+            "device": {"vendor": "Cisco"},
+            "findings": [
+                {
+                    "id": "legacy-service-policy",
+                    "affected_objects": ["Rule EDGE / line 1"],
+                    "evidence": {"rules": [{"id": "EDGE / line 1", "services": ["ALL"]}]},
+                }
+            ],
+        }
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("One enabled rule referenced", commentary)
+        self.assertIn("including ALL", commentary)
+        self.assertIn("does not by itself establish which protocols", commentary)
+        self.assertIn("Affected rules: EDGE / line 1", commentary)
+
+    def test_unknown_finding_preserves_its_description_and_impact(self) -> None:
+        report = {
+            "findings": [
+                {
+                    "id": "other",
+                    "title": "Additional observation",
+                    "description": "A configuration issue was identified.",
+                    "impact": "It may affect access.",
+                }
+            ]
+        }
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("A configuration issue was identified.", commentary)
+        self.assertIn("It may affect access.", commentary)
 
 
 if __name__ == "__main__":
