@@ -7,6 +7,8 @@ schedule, logging setting, and NAT setting.
 For Cisco ASA/FTD exports, the parser extracts extended and advanced ACL
 entries and their bindings. The checks apply only to bound ACLs; standard
 ACLs are excluded and reported as a parsing limitation.
+Where interface information is available, findings combine the source and
+destination interfaces into one path alongside the address columns.
 
 ## Unrestricted endpoints
 
@@ -37,6 +39,8 @@ references and supported resolved scopes, services, the configured schedule
 and the reason for review. Cisco checks are limited to bound ACLs.
 Rules dedicated exclusively to supplied assessment hosts are excluded from
 all automated rule findings; shared rules are still reviewed.
+The commentary keeps the rule table compact and presents schedules, review
+indicators and resolved or unresolved source details below it.
 
 These are indicators for owner review, not proof that access is temporary,
 expired or no longer required. Creation dates, ownership and the effective

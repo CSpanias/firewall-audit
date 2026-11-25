@@ -207,7 +207,7 @@ def run_fortigate_checks(
         vip["name"] for vip in config.virtual_ips
         if vip["name"] in published_vips and _vip_may_publish_admin(vip)
     }
-    admin_vip_rules: list[tuple[FirewallRule, list[str], list[str]]] = []
+    admin_vip_rules: list[tuple[FirewallRule, dict[str, list[str]]]] = []
     for rule in enabled_rules:
         if str(rule.metadata.get("dstaddr-negate", "")).lower() == "enable":
             continue
@@ -215,8 +215,7 @@ def run_fortigate_checks(
         for destination in rule.destination_addresses:
             destinations.update(_expand_address_group(destination, config))
         destination_names = {destination.casefold() for destination in destinations}
-        matches = []
-        services: set[str] = set()
+        matches: dict[str, list[str]] = {}
         for vip in config.virtual_ips:
             if vip["name"] not in admin_vips or vip["name"].casefold() not in destination_names:
                 continue
@@ -233,14 +232,16 @@ def run_fortigate_checks(
                 rule, config, names, ports, protocols={"tcp"}
             )
             if matching_services:
-                matches.append(vip["name"])
-                services.update(matching_services)
-        if matches and services:
-            admin_vip_rules.append((rule, sorted(services), sorted(matches)))
+                matches[vip["name"]] = matching_services
+        if matches:
+            admin_vip_rules.append((rule, matches))
     if admin_vip_rules:
         definition = definitions["admin-service-vip-policy"]
-        rule_ids = [rule.id for rule, _, _ in admin_vip_rules]
-        services = sorted({service for _, matched, _ in admin_vip_rules for service in matched})
+        rule_ids = [rule.id for rule, _ in admin_vip_rules]
+        services = sorted({
+            service for _, matches in admin_vip_rules
+            for matched_services in matches.values() for service in matched_services
+        })
         findings.append(
             _finding(
                 definition,
@@ -257,7 +258,10 @@ def run_fortigate_checks(
                                 else "No"
                             ),
                             "destination_addresses": rule.destination_addresses,
-                            "services": services_for_rule,
+                            "services": sorted({
+                                service for matched_services in matches.values()
+                                for service in matched_services
+                            }),
                             "vip_port_mapping": [
                                 (
                                     f"{vip['name']}: {vip.get('extport', 'not specified')} -> "
@@ -267,8 +271,28 @@ def run_fortigate_checks(
                                 else f"{vip['name']}: no explicit port forwarding"
                                 for vip in config.virtual_ips if vip["name"] in matches
                             ],
+                            "vip_details": [
+                                {
+                                    "name": vip["name"],
+                                    "references": [
+                                        reference for reference in rule.destination_addresses
+                                        if vip["name"].casefold() in {
+                                            name.casefold()
+                                            for name in _expand_address_group(reference, config)
+                                        }
+                                    ],
+                                    "services": matches[vip["name"]],
+                                    "port_mapping": (
+                                        f"{vip.get('extport', 'not specified')} -> "
+                                        f"{vip.get('mappedport', 'not specified')}"
+                                        if vip.get("portforward", "").lower() == "enable"
+                                        else "No explicit port forwarding"
+                                    ),
+                                }
+                                for vip in config.virtual_ips if vip["name"] in matches
+                            ],
                         }
-                        for rule, services_for_rule, matches in admin_vip_rules
+                        for rule, matches in admin_vip_rules
                     ],
                     "virtual_ips": sorted(admin_vips),
                 },
@@ -296,7 +320,17 @@ def run_fortigate_checks(
                             "source_interfaces": rule.source_zones,
                             "destination_interfaces": rule.destination_zones,
                             "source_addresses": rule.source_addresses,
+                            "source_negated": (
+                                "Yes"
+                                if str(rule.metadata.get("srcaddr-negate", "")).lower() == "enable"
+                                else "No"
+                            ),
                             "destination_addresses": rule.destination_addresses,
+                            "destination_negated": (
+                                "Yes"
+                                if str(rule.metadata.get("dstaddr-negate", "")).lower() == "enable"
+                                else "No"
+                            ),
                             "services": services_for_rule,
                         }
                         for rule, services_for_rule in legacy_rules

@@ -16,7 +16,9 @@ findings:
       Policies without source or destination restrictions can allow connections
       beyond those required for the intended purpose. Depending on the interfaces,
       services and other controls involved, this may weaken network segmentation
-      and increase opportunities for lateral movement.
+      and increase opportunities for lateral movement. Unrestricted addresses do
+      not necessarily mean all services are permitted or that traffic is reachable;
+      review the service, interfaces, rule order and other controls.
     executive_summary: >-
       Some firewall policies permitted traffic without source or destination
       restrictions, potentially allowing unintended connections and movement
@@ -43,7 +45,9 @@ findings:
       Administrative services accessible from untrusted networks may be targeted
       through credential attacks or vulnerabilities in the management interface.
       Interface configuration alone does not establish whether these services are
-      reachable or whether other controls restrict access.
+      reachable or whether other controls restrict access. These services manage
+      the firewall itself; verify trusted-host restrictions, local-in policies and
+      upstream controls before assessing the exposure.
     executive_summary: >-
       Firewall management services were enabled on interfaces identified as
       WAN-facing. If accessible from untrusted networks, these services could
@@ -71,7 +75,9 @@ findings:
       Where reachable from untrusted networks, administrative services may be
       targeted through credential attacks or exploitation of vulnerable systems.
       The configured services and virtual IPs do not establish the purpose of the
-      mapped systems or confirm that they are externally reachable.
+      mapped systems or confirm that they are externally reachable. Source address
+      restrictions may limit access, but their membership and effectiveness require
+      verification alongside upstream controls.
     executive_summary: >-
       Firewall policies may allow remote administration of systems that could
       be accessible from outside the organisation. Where accessible
@@ -97,11 +103,11 @@ findings:
       Clear-text services can expose credentials and traffic to interception;
       unrestricted services may permit protocols beyond those required.
     commentary_impact: >-
-      Clear-text protocols may expose sensitive information to interception where
-      traffic traverses untrusted networks. Broad service definitions can also
-      permit more network access than is required for the underlying business
-      purpose. A broad definition does not by itself establish which protocols
-      are actually in use.
+      Clear-text traffic may be intercepted or modified by someone with access
+      to the traffic path, including on internal networks. Broad service
+      definitions can permit more network access than is required for the
+      underlying business purpose. A broad definition does not by itself
+      establish which protocols are actually in use.
     executive_summary: >-
       Some policies referenced legacy services or broadly defined services
       that may permit clear-text protocols and increase the risk of sensitive
@@ -130,7 +136,8 @@ findings:
       Centralised collection supports monitoring and incident investigation by
       making firewall events available alongside other security records. Without
       an identified destination, the availability of these events for central
-      monitoring could not be established.
+      monitoring could not be established. This does not establish that local
+      logging or another collection method is absent; verify ingestion and retention.
     executive_summary: >-
       No enabled destination was identified in the supported logging settings,
       so central collection and investigation capability require verification.
@@ -156,7 +163,8 @@ findings:
     commentary_impact: >-
       Where traffic is not logged and equivalent monitoring is unavailable,
       connections allowed or denied by these policies may be harder to investigate or
-      correlate with other security events.
+      correlate with other security events. A configured central destination does
+      not itself enable traffic logging on these policies.
     executive_summary: >-
       Traffic logging was explicitly disabled on some enabled policies,
       potentially leaving gaps in monitoring and incident investigations.
@@ -182,6 +190,8 @@ findings:
       Centralised authentication can support consistent account lifecycle
       management, accountability and auditing. Reliance on locally managed
       accounts may make these controls more difficult to enforce consistently.
+      Local emergency accounts may still be appropriate; verify administrator
+      authentication, access restrictions and emergency-access procedures.
     executive_summary: >-
       Centralised authentication for firewall administrators could not be
       confirmed from the reviewed settings, which may make access management,
@@ -208,7 +218,9 @@ findings:
       Accurate and trusted timestamps support security monitoring, event
       correlation and investigations. Where synchronisation is disabled or
       the time source cannot be verified, firewall logs may not align with
-      the wider monitoring infrastructure.
+      the wider monitoring infrastructure. An absent explicit server entry does
+      not by itself prove that no time source is in use; vendor defaults or other
+      sources may apply.
     executive_summary: >-
       The configured time source or Network Time Protocol (NTP) synchronisation
       could not be verified, potentially affecting the accuracy of event
@@ -236,7 +248,8 @@ findings:
       Temporary access that remains in place beyond its intended use may permit
       unnecessary connections. The configuration alone does not establish when
       the access was approved, whether it has expired or whether it remains
-      required.
+      required. Testing-related names or host references are indicators for review,
+      not proof that the rule is dedicated to testing or should be removed.
     executive_summary: >-
       Some rules explicitly referenced assessment hosts or included terms
       suggesting temporary or testing-related access. Their intended duration

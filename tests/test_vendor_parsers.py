@@ -201,7 +201,7 @@ Firewall Policies Details
         self.assertIn("| Model | Firebox Example |", report["technical_commentary"])
         report_with_context = build_report(config, [], "report.pdf", ["192.0.2.1"])
         self.assertIn(
-            "Dedicated rules could not be evaluated for exclusion",
+            "dedicated rules could not be evaluated for exclusion",
             report_with_context["technical_commentary"],
         )
         self.assertEqual(

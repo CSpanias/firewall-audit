@@ -20,3 +20,9 @@ The check does not prove that a particular application uses a protocol
 securely. Confirm the service, destination, business need, and compensating
 controls. Prefer secure alternatives, disable unused services and helpers,
 and explicitly restrict insecure protocols.
+
+The technical commentary explains the relevant risks for recognised service
+names referenced directly or through service groups. A name or port match
+does not establish the protocol, transport, encryption, or actual traffic.
+In particular, traditional Syslog commonly uses unencrypted UDP or TCP, but
+Syslog can also be protected using TLS.

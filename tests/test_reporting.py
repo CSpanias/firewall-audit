@@ -317,7 +317,7 @@ class FortiOSReportingTests(unittest.TestCase):
         )
         self.assertIn("`assessment-host` (`10.1.0.35`)", report["technical_commentary"])
         self.assertIn(
-            "Dedicated rules for this host were excluded", report["technical_commentary"]
+            "any dedicated rules were identified for exclusion", report["technical_commentary"]
         )
         self.assertIn("host was used for testing", report["technical_commentary"])
         self.assertNotIn("were supplied", report["technical_commentary"])
@@ -371,12 +371,15 @@ class FortiOSReportingTests(unittest.TestCase):
     def test_admin_vip_checks_mapped_ports_and_preserves_source_context(self) -> None:
         config = deepcopy(self.config)
         config.address_groups["excluded-admin"] = ["ssh-vip"]
+        config.address_groups["management-vips"] = ["ssh-vip", "ssh-vip-2"]
         config.excluded_address_groups.add("excluded-admin")
         config.virtual_ips = [
             {"name": "web-vip", "extintf": "wan1", "portforward": "enable",
              "extport": "443", "mappedport": "443"},
             {"name": "ssh-vip", "extintf": "wan1", "portforward": "enable",
              "extport": "2222", "mappedport": "22"},
+            {"name": "ssh-vip-2", "extintf": "wan1", "portforward": "enable",
+             "extport": "2022", "mappedport": "22"},
             {"name": "ssh-over-web-port", "extintf": "wan1", "portforward": "enable",
              "extport": "443", "mappedport": "22"},
             {"name": "udp-vip", "extintf": "wan1", "portforward": "enable",
@@ -385,7 +388,8 @@ class FortiOSReportingTests(unittest.TestCase):
         config.rules = [
             FirewallRule(id="web", source_addresses=["all"], destination_addresses=["web-vip"],
                          services=["ALL"], action="accept"),
-            FirewallRule(id="ssh", source_addresses=["admins"], destination_addresses=["ssh-vip"],
+            FirewallRule(id="ssh", source_addresses=["admins"],
+                         destination_addresses=["management-vips"],
                          services=["ALL"], action="accept",
                          metadata={"srcaddr-negate": "enable"}),
             FirewallRule(id="web-ssh", source_addresses=["all"],
@@ -404,10 +408,24 @@ class FortiOSReportingTests(unittest.TestCase):
         admin = next(item for item in findings if item.id == "admin-service-vip-policy")
         self.assertEqual(admin.affected_objects, ["Policy ssh", "Policy web-ssh"])
         self.assertEqual(admin.data["rules"][0]["source_negated"], "Yes")
-        self.assertEqual(admin.data["rules"][0]["vip_port_mapping"], ["ssh-vip: 2222 -> 22"])
+        self.assertEqual(admin.data["rules"][0]["vip_port_mapping"], [
+            "ssh-vip: 2222 -> 22", "ssh-vip-2: 2022 -> 22"
+        ])
+        commentary = build_report(config, findings, "firewall.conf")["technical_commentary"]
+        self.assertIn("| Rule | Source | Destination | Services | Port mapping |", commentary)
+        self.assertIn(
+            r"| ssh | Except: admins | ssh-vip (via management-vips) | ALL | 2222 -\> 22 |",
+            commentary,
+        )
+        self.assertIn(
+            r"| ssh | Except: admins | ssh-vip-2 (via management-vips) | ALL | 2022 -\> 22 |",
+            commentary,
+        )
+        self.assertIn(r"| web-ssh | all | ssh-over-web-port | HTTPS | 443 -\> 22 |", commentary)
+        self.assertNotIn("Source negated", commentary)
         legacy = next(item for item in findings if item.id == "legacy-service-policy")
         self.assertNotIn("Policy web", legacy.affected_objects)
-        self.assertNotIn("Policy ssh", legacy.affected_objects)
+        self.assertIn("Policy ssh", legacy.affected_objects)
 
     def test_negated_wildcard_is_not_reported_as_unrestricted(self) -> None:
         config = deepcopy(self.config)
@@ -806,10 +824,13 @@ class AssessmentContextTests(unittest.TestCase):
         commentary = build_report(config, [], "firewall.conf", ["192.0.2.10"])[
             "technical_commentary"
         ]
-        self.assertIn("The `test-vm` (`192.0.2.10`) host was used for testing.", commentary)
-        self.assertIn("No dedicated rules were identified for exclusion", commentary)
+        self.assertIn(
+            "**Note:** The `test-vm` (`192.0.2.10`) host was used for testing, therefore, "
+            "any dedicated rules were identified for exclusion. "
+            "Shared and subnet rules remained in scope.",
+            commentary,
+        )
         self.assertNotIn("were supplied", commentary)
-        self.assertNotIn("were excluded from automated findings", commentary)
 
     def test_exclusion_requires_a_fully_resolved_host_only_side(self) -> None:
         config = FirewallConfig(
@@ -1241,6 +1262,220 @@ class RemediationGuidanceTests(unittest.TestCase):
 
 
 class TechnicalCommentaryTests(unittest.TestCase):
+    def test_temporary_access_table_retains_details_outside_the_table(self) -> None:
+        report = {"findings": [{
+            "id": "temporary-access-review",
+            "affected_objects": ["Policy 37"],
+            "evidence": {"rules": [{
+                "id": "37",
+                "rule_type": "Firewall policy",
+                "name": "Temporary RDP",
+                "source_addresses": ["Admin group"],
+                "source_negated": "Yes",
+                "destination_addresses": ["server"],
+                "services": ["RDP"],
+                "schedule": "always",
+                "indicators": ["Rule name contains: TEMP"],
+                "source_address_scopes": ["Admin group: 192.0.2.1"],
+                "unresolved_source_references": ["Admin group: unknown|host"],
+            }]},
+        }]}
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn(
+            "| Rule | Rule name | Source addresses | Destination addresses | Services |",
+            commentary,
+        )
+        self.assertIn("| 37 | Temporary RDP | Except: Admin group | server | RDP |", commentary)
+        self.assertNotIn("| Resolved source scopes |", commentary)
+        self.assertIn("Rule 37:", commentary)
+        self.assertIn("- Rule type: Firewall policy", commentary)
+        self.assertIn("- Schedule: always", commentary)
+        self.assertIn("- Review indicators: Rule name contains: TEMP", commentary)
+        self.assertIn("- Resolved source scopes: Admin group: 192.0.2.1", commentary)
+        self.assertIn(r"- Unresolved source references: Admin group: unknown\|host", commentary)
+
+    def test_service_context_follows_flagged_services_and_nested_groups(self) -> None:
+        report = {
+            "access_control": {"service_groups": {
+                "Mixed": ["HTTP", "nested"],
+                "nested": ["Mixed", "SYSLOG"],
+                "unused": ["FTP"],
+            }},
+            "findings": [{
+                "id": "legacy-service-policy",
+                "affected_objects": ["Policy 1"],
+                "evidence": {"rules": [{
+                    "id": "1", "services": ["mixed", "samba", "ALL", "custom"],
+                }]},
+            }],
+        }
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("HTTP: HTTP does not encrypt", commentary)
+        self.assertIn("Syslog: Traditional Syslog", commentary)
+        self.assertIn("Syslog can also use TLS", commentary)
+        self.assertIn("SMB and NetBIOS:", commentary)
+        self.assertIn("ALL: A broad service definition", commentary)
+        self.assertNotIn("FTP:", commentary)
+        self.assertNotIn("SNMP:", commentary)
+
+    def test_custom_service_does_not_claim_a_specific_protocol(self) -> None:
+        report = {"findings": [{
+            "id": "legacy-service-policy",
+            "affected_objects": ["Policy 1"],
+            "evidence": {"rules": [{"id": "1", "services": ["custom-port-80"]}]},
+        }]}
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("Clear-text traffic may be intercepted", commentary)
+        self.assertNotIn("HTTP:", commentary)
+        self.assertNotIn("Syslog:", commentary)
+
+    def test_detected_service_definitions_receive_explanations_in_report(self) -> None:
+        config = FirewallConfig(
+            service_definitions={
+                "SYSLOG": {"udp-portrange": ["514"]},
+                "SAMBA": {"tcp-portrange": ["137-139", "445"]},
+            },
+            rules=[FirewallRule(
+                id="1",
+                source_addresses=["internal"],
+                destination_addresses=["all"],
+                services=["HTTP", "SYSLOG", "SAMBA", "ALL"],
+                action="accept",
+            )],
+        )
+        report = build_report(config, run_fortigate_checks(config), "firewall.conf")
+        commentary = report["technical_commentary"]
+        for explanation in ("HTTP:", "Syslog:", "SMB and NetBIOS:", "ALL:"):
+            self.assertIn(explanation, commentary)
+
+    def test_findings_explain_limits_and_controls_relevant_to_their_evidence(self) -> None:
+        expectations = {
+            "broad-allow-rule": "not necessarily mean all services are permitted",
+            "admin-services-on-wan": "These services manage the firewall itself",
+            "admin-service-vip-policy": "Source address restrictions may limit access",
+            "logging-coverage-gap": "does not establish that local logging",
+            "policy-logging-gap": "does not itself enable traffic logging",
+            "local-admin-auth": "Local emergency accounts may still be appropriate",
+            "ntp-server-review": "does not by itself prove that no time source",
+            "temporary-access-review": "not proof that the rule is dedicated to testing",
+        }
+        for finding_id, expected in expectations.items():
+            with self.subTest(finding_id=finding_id):
+                report = {"findings": [{"id": finding_id, "evidence": {}}]}
+                commentary = build_narratives(report)["technical_commentary"]
+                self.assertIn(expected, commentary)
+
+    def test_legacy_service_report_preserves_negated_policy_addresses(self) -> None:
+        config = FirewallConfig(rules=[FirewallRule(
+            id="1",
+            source_addresses=["excluded"],
+            destination_addresses=["internal"],
+            services=["HTTP"],
+            action="accept",
+            metadata={"srcaddr-negate": "enable"},
+        )])
+        report = build_report(config, run_fortigate_checks(config), "firewall.conf")
+        self.assertIn("Except: excluded", report["technical_commentary"])
+
+    def test_management_context_reflects_observed_services_and_forwarding(self) -> None:
+        report = {"findings": [
+            {
+                "id": "admin-services-on-wan",
+                "affected_objects": ["Interface wan1"],
+                "evidence": {"interfaces": [{"name": "wan1", "services": ["HTTPS", "HTTP"]}]},
+            },
+            {
+                "id": "admin-service-vip-policy",
+                "affected_objects": ["Policy 1"],
+                "evidence": {"rules": [{
+                    "id": "1", "services": ["ALL"],
+                    "vip_details": [{
+                        "name": "admin", "references": ["admin"], "services": ["ALL"],
+                        "port_mapping": "2222 -> 22",
+                    }],
+                }]},
+            },
+        ]}
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("Management access includes `http`", commentary)
+        self.assertIn("the VIP maps an external port", commentary)
+        self.assertIn("An ALL policy service does not override", commentary)
+        report["findings"][0]["evidence"]["interfaces"][0]["services"] = ["HTTPS"]
+        report["findings"][1]["evidence"]["rules"][0]["vip_details"][0]["port_mapping"] = (
+            "No explicit port forwarding"
+        )
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertNotIn("Management access includes `http`", commentary)
+        self.assertNotIn("the VIP maps an external port", commentary)
+
+    def test_rule_interfaces_are_combined_and_address_columns_are_explicit(self) -> None:
+        report = {
+            "findings": [{
+                "id": "legacy-service-policy",
+                "affected_objects": ["Policy 1", "Policy 2", "Policy 3"],
+                "evidence": {"rules": [
+                    {
+                        "id": "1",
+                        "source_interfaces": ["Azure", "LAN"],
+                        "destination_interfaces": ["Internet"],
+                        "source_addresses": ["host"],
+                        "destination_addresses": ["all"],
+                        "services": ["HTTP"],
+                    },
+                    {
+                        "id": "2",
+                        "source_interfaces": ["VPN"],
+                        "source_addresses": ["user-net"],
+                        "destination_addresses": ["server"],
+                        "services": ["ALL"],
+                    },
+                    {
+                        "id": "3",
+                        "destination_interfaces": ["internal|dmz"],
+                        "source_addresses": ["admins"],
+                        "source_negated": "Yes",
+                        "destination_addresses": ["server"],
+                        "destination_negated": "Yes",
+                        "services": ["SSH"],
+                    },
+                ]},
+            }],
+        }
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn(
+            "| Rule | Interfaces (from → to) | Source addresses | Destination addresses | "
+            "Services |",
+            commentary,
+        )
+        self.assertIn("| 1 | Azure, LAN → Internet | host | all | HTTP |", commentary)
+        self.assertIn("| 2 | VPN → Not specified | user-net | server | ALL |", commentary)
+        self.assertIn(
+            r"| 3 | Not specified → internal\|dmz | Except: admins | Except: server | SSH |",
+            commentary,
+        )
+        self.assertNotIn("Source interfaces", commentary)
+        self.assertNotIn("Destination interfaces", commentary)
+
+    def test_address_negation_is_shown_in_address_cells(self) -> None:
+        report = {
+            "findings": [{
+                "id": "temporary-access-review",
+                "affected_objects": ["Policy 1"],
+                "evidence": {"rules": [{
+                    "id": "1",
+                    "source_addresses": ["admins", "operators"],
+                    "source_negated": "Yes",
+                    "destination_addresses": ["internal"],
+                    "destination_negated": "Yes",
+                    "services": ["SSH"],
+                }]},
+            }],
+        }
+        commentary = build_narratives(report)["technical_commentary"]
+        self.assertIn("| 1 | Except: admins, operators | Except: internal | SSH |", commentary)
+        self.assertNotIn("Source negated", commentary)
+        self.assertNotIn("Destination negated", commentary)
+
     def test_groups_rules_and_writes_evidence_led_commentary(self) -> None:
         report = {
             "device": {"hostname": "edge-fw", "vendor": "Fortinet"},

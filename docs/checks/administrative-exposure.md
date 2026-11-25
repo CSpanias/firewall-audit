@@ -26,6 +26,8 @@ by this check.
 Check the source scope, VIP mapping, target system, and business owner. A VIP
 may publish a management interface belonging to another device; the static
 configuration alone cannot establish that context or actual reachability.
+The evidence table shows each matching VIP and its external-to-mapped port
+mapping separately. Negated source addresses are marked `Except:`.
 HTTP and HTTPS may still host administrative interfaces, and administrative
 services may use non-standard ports; these require manual review.
 
