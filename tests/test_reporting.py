@@ -559,10 +559,11 @@ class FortiOSReportingTests(unittest.TestCase):
         mapped = root.findall(".//vulnerability")
 
         self.assertEqual(exported, 3)
-        self.assertEqual(unmapped, len(findings) - 2)
+        self.assertEqual(unmapped, len(findings) - 3)
         self.assertEqual(
             [item.attrib["id"] for item in mapped], ["SC-3393", "SC-1831", "SC-9974"]
         )
+        self.assertIn("Broad service definitions require review", mapped[1].findtext("information"))
         review = mapped[0].findtext("information")
         self.assertIn("Firewall Configuration Review", review)
         self.assertIn(report["executive_summary"], review)
@@ -592,6 +593,61 @@ class FortiOSReportingTests(unittest.TestCase):
         ids = [item.attrib["id"] for item in ET.parse(xml_path).findall(".//vulnerability")]
         self.assertEqual(ids, ["SC-3393"])
         self.assertEqual((exported, unmapped), (1, 0))
+
+    def test_sureformat_exports_broad_and_temporary_review_candidates(self) -> None:
+        config = FirewallConfig(
+            vendor="Fortinet",
+            service_groups={"broad": ["nested"], "nested": ["ALL", "broad"]},
+            rules=[
+                FirewallRule(id="1", source_addresses=["admins"], destination_addresses=["server"],
+                             services=["ALL"], action="accept"),
+                FirewallRule(id="2", source_addresses=["users"], destination_addresses=["server"],
+                             services=["HTTP"], action="accept"),
+                FirewallRule(id="3", source_addresses=["admins"], destination_addresses=["server"],
+                             services=["broad"], action="accept"),
+                FirewallRule(id="4", name="TEMP access", services=["HTTPS"], action="accept"),
+                FirewallRule(id="5", name="Test network", services=["HTTPS"], action="accept"),
+                FirewallRule(id="6", source_addresses=["192.0.2.1", "192.0.2.2"],
+                             services=["HTTPS"], action="accept"),
+                FirewallRule(id="7", name="TEMP disabled", services=["HTTPS"],
+                             action="accept", enabled=False),
+            ],
+        )
+        findings = run_fortigate_checks(config, ["192.0.2.1"])
+        report = build_report(config, findings, "firewall.conf", ["192.0.2.1"])
+        xml_path, _, _ = export_sureformat(report, self.directory / "candidates.xml")
+        vulnerabilities = ET.parse(xml_path).getroot().findall(".//vulnerability")
+        mapped = {item.attrib["id"]: item.findtext("information") for item in vulnerabilities}
+
+        self.assertEqual(
+            len([item for item in vulnerabilities if item.attrib["id"] == "SC-1831"]), 1
+        )
+        self.assertIn("Affected: Policy 1, Policy 3", mapped["SC-1831"])
+        self.assertIn("Policy 1: Source: admins; Destination: server; Services: ALL",
+                      mapped["SC-1831"])
+        self.assertNotIn("Policy 2", mapped["SC-1831"])
+        self.assertIn("business requirement and actual traffic have not been established",
+                      mapped["SC-1831"])
+        self.assertIn("Affected: Policy 4, Policy 5, Policy 6", mapped["SC-3398"])
+        self.assertIn("Rule name contains: TEMP", mapped["SC-3398"])
+        self.assertIn("Rule name contains: Test", mapped["SC-3398"])
+        self.assertIn("Explicit assessment host: 192.0.2.1", mapped["SC-3398"])
+        self.assertNotIn("Policy 7", mapped["SC-3398"])
+        self.assertIn("intended duration and continued need could not be established",
+                      mapped["SC-3398"].lower())
+
+    def test_sureformat_does_not_map_http_only_as_broad_access(self) -> None:
+        config = FirewallConfig(vendor="Fortinet", rules=[
+            FirewallRule(id="1", source_addresses=["users"], destination_addresses=["server"],
+                         services=["HTTP"], action="accept"),
+        ])
+        findings = run_fortigate_checks(config)
+        report = build_report(config, findings, "firewall.conf")
+        xml_path, _, _ = export_sureformat(report, self.directory / "http-only.xml")
+        ids = [item.attrib["id"] for item in ET.parse(xml_path).getroot().findall(
+            ".//vulnerability"
+        )]
+        self.assertNotIn("SC-1831", ids)
 
     def test_cli_defaults_to_json_and_html(self) -> None:
         arguments = build_parser().parse_args(

@@ -314,5 +314,6 @@ def find_temporary_access(
             recommendation=definition.recommendation,
             affected_objects=affected,
             data={"rules": evidence},
+            sureformat_id=definition.sureformat_id,
         )
     ]

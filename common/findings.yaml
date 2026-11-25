@@ -233,6 +233,7 @@ findings:
       - title: "RFC 8915: Network Time Security for the Network Time Protocol"
         url: https://www.rfc-editor.org/info/rfc8915
   temporary-access-review:
+    sureformat_id: SC-3398
     title: Potential temporary access requires review
     commentary_title: Potential Temporary or Assessment Access
     category: access-control
