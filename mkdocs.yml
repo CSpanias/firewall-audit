@@ -1,0 +1,53 @@
+site_name: Firewall-Audit
+site_description: FortiGate configuration review and reporting toolkit.
+site_url: https://cspanias.github.io/firewall-audit/
+repo_name: CSpanias/firewall-audit
+repo_url: https://github.com/CSpanias/firewall-audit
+edit_uri: blob/main/docs/
+strict: true
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+nav:
+  - Overview: index.md
+  - Installation: installation.md
+  - Workflow and reports: workflow.md
+  - Checks:
+      - Overview: checks/index.md
+      - Network architecture: checks/network-architecture.md
+      - Access control: checks/access-control.md
+      - Administrative exposure: checks/administrative-exposure.md
+      - Legacy services: checks/legacy-services.md
+      - Administration: checks/administration.md
+      - Logging and monitoring: checks/logging-monitoring.md
+      - VPN and NAT: checks/vpn-nat.md

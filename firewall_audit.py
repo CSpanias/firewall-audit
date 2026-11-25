@@ -166,7 +166,7 @@ class FirewallAudit:
         current_is_tunnel = False
         current_zone = None
 
-        inside_forti_interfaces = False
+        inside_forti_interfaces = False # (X)
         inside_forti_zones = False
 
         current_forti_zone = None
@@ -273,7 +273,7 @@ class FirewallAudit:
 
             # FortiGate Device Information
 
-            # Hostname
+            # Hostname (X)
             match = re.match(r"set hostname \"?(.+?)\"?$", line)
             if match:
                 self.hostname = match.group(1)
@@ -353,14 +353,14 @@ class FirewallAudit:
                         "interface": parts[3]
                     })
 
-            # FortiGate Interfaces
+            # FortiGate Interfaces (X)
             if line == "config system interface":
                 inside_forti_interfaces = True
 
             elif inside_forti_interfaces and line == "end":
                 inside_forti_interfaces = False
 
-            # FortiGate Interface Names
+            # FortiGate Interface Names (X)
             match = re.match(r'edit\s+"(.+)"', line)
 
             if inside_forti_interfaces and match:

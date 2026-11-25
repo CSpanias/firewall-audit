@@ -1,0 +1,93 @@
+schema_version: 1
+findings:
+  broad-allow-rule:
+    title: Allow rule has unrestricted source and destination
+    category: access-control
+    severity: high
+    description: >-
+      Enabled policy {rule_id} permits traffic with an unrestricted source and
+      destination. Review the intended scope, interfaces, and required services.
+    recommendation: >-
+      Restrict the policy to documented source and destination networks and the
+      minimum required services. Confirm the rule owner and business purpose.
+  admin-services-on-wan:
+    title: Firewall management services are enabled on a WAN interface
+    category: control-plane
+    severity: high
+    description: >-
+      Interface {interfaces} enables {services} for management access and is
+      identified as WAN-facing. The configuration alone does not establish
+      internet reachability or source restrictions.
+    recommendation: >-
+      Disable administrative services on public-facing interfaces where
+      possible. Otherwise restrict management to dedicated, trusted source
+      networks and verify reachability controls outside this configuration.
+  admin-service-vip-policy:
+    title: Policy publishes firewall administration services through a VIP
+    category: access-control
+    severity: high
+    description: >-
+      Enabled policy {rule_ids} permits {services} to a virtual IP configured
+      on a WAN-facing interface. Verify that the mapped service is intended,
+      source-restricted, and not a management plane for a network device.
+    recommendation: >-
+      Remove unnecessary administrative-service publishing. If required,
+      restrict source networks, use a hardened management gateway, and verify
+      the mapped host and service owner.
+  legacy-service-policy:
+    title: Policy references clear-text or legacy network services
+    category: access-control
+    severity: high
+    description: >-
+      Enabled allow policy {rule_ids} references {services}, which includes
+      clear-text or legacy protocols or an unrestricted service definition.
+      Confirm the actual protocol and business requirement.
+    recommendation: >-
+      Replace legacy protocols with secure alternatives, disable unused
+      services and helpers, and explicitly restrict or block insecure services.
+  logging-coverage-gap:
+    title: Remote logging is absent or not enabled
+    category: logging
+    severity: medium
+    description: >-
+      No enabled Syslog or FortiAnalyzer destination was identified. Without
+      centralized event collection, incident investigation and monitoring may
+      be incomplete.
+    recommendation: >-
+      Configure an approved centralized logging destination, enable the
+      required event categories and policy logging, and validate ingestion,
+      retention, access controls, and alerting.
+  policy-logging-gap:
+    title: Some enabled policies explicitly disable traffic logging
+    category: logging
+    severity: low
+    description: >-
+      Enabled policies {rule_ids} explicitly disable traffic logging. Confirm
+      that these exclusions are intentional and that equivalent monitoring is
+      available.
+    recommendation: >-
+      Enable policy logging where operationally appropriate and ensure
+      exceptions are documented, monitored, and periodically reviewed.
+  local-admin-auth:
+    title: Firewall administrators have no configured central AAA server
+    category: administration
+    severity: medium
+    description: >-
+      {admin_count} administrator account(s) were identified, but no configured
+      RADIUS, LDAP, or TACACS+ server was found. Authentication centralization
+      and account lifecycle controls should be reviewed.
+    recommendation: >-
+      Where supported by operational requirements, use centrally managed
+      administrator authentication with MFA. Review local accounts, trusted
+      hosts, role assignments, and emergency-access procedures.
+  ntp-server-review:
+    title: No explicit trusted NTP server is configured
+    category: monitoring
+    severity: medium
+    description: >-
+      NTP synchronization is {sync_state}, but no explicit NTP server entry
+      was found in the configuration. The time source and its trust boundary
+      could not be verified.
+    recommendation: >-
+      Configure approved time sources, restrict NTP access to those sources,
+      and verify synchronized time across the firewall and monitoring systems.

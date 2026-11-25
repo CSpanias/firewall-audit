@@ -1,9 +1,45 @@
 [project]
 name = "firewall-audit"
 version = "0.1.0"
-description = "Lightweight firewall security assessment tool"
+description = "Firewall configuration review and reporting tool"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "rich>=13.0",
+]
 
 [project.scripts]
-firewall-audit = "firewall_audit:main"
+firewall-audit = "cli.main:main"
+
+[project.optional-dependencies]
+docs = ["mkdocs-material"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["analysis", "cli", "common", "models", "parsers", "reporting"]
+
+[tool.setuptools.package-data]
+common = ["findings.yaml"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"reporting/html.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
